@@ -8,6 +8,7 @@ A powerful LangGraph agent that integrates with MCP (Model Context Protocol) ser
 - 🔌 **MCP Server Integration**: Connects to MCP servers via SSE/Streamable HTTP protocol
 - 🛠️ **Dynamic Tool Discovery**: Automatically discovers and uses tools from MCP servers
 - 📚 **Resource Management**: Lists and fetches resources from MCP servers
+- 🎯 **Automatic Resource Context Injection**: Automatically injects available MCP resources into the LLM context on first message
 - 💬 **Interactive Chat**: Provides both standard and streaming chat interfaces
 - 🔄 **Stateful Conversations**: Maintains conversation context with checkpointing
 - 📊 **Comprehensive Logging**: Detailed logging for debugging and monitoring
@@ -184,6 +185,48 @@ async def stream_example():
 asyncio.run(stream_example())
 ```
 
+### Automatic Resource Context Injection
+
+The agent automatically injects available MCP resources into the LLM's context on the first message of each conversation thread. This ensures the LLM is aware of all available resources from the start.
+
+```python
+async def resource_injection_example():
+    config = Config()
+    agent = MCPAgent(config)
+    await agent.initialize()
+    
+    # First message - resources are automatically injected
+    response1 = await agent.invoke(
+        "What resources do you have access to?",
+        thread_id="conversation_1"
+    )
+    print(response1)
+    
+    # Subsequent messages in same thread - no duplicate injection
+    response2 = await agent.invoke(
+        "Can you use those resources to help me?",
+        thread_id="conversation_1"
+    )
+    print(response2)
+    
+    # New thread - resources injected again for new context
+    response3 = await agent.invoke(
+        "Hello!",
+        thread_id="conversation_2"
+    )
+    print(response3)
+    
+    await agent.close()
+
+asyncio.run(resource_injection_example())
+```
+
+**Key Features:**
+- Resources are injected only once per thread
+- Each new thread gets fresh resource context
+- Works with both `invoke()` and `stream()` methods
+- Gracefully handles cases with no available resources
+
 ## Example Scripts
 
 The `scripts/` directory contains several example scripts:
@@ -194,6 +237,7 @@ The `scripts/` directory contains several example scripts:
 - **fetch_resources.py** - Interactive resource fetcher
 - **test_connection.py** - Test MCP server connectivity
 - **demo_tool_execution.py** - Demonstrate tool execution
+- **demo_resource_injection.py** - Demonstrate automatic resource context injection
 
 ### Testing Connection
 

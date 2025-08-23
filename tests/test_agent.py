@@ -6,7 +6,7 @@ import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
 from src.langgraph_agent_mcp.agent import MCPAgent
 from src.langgraph_agent_mcp.config import Config
-from langchain_core.messages import HumanMessage, AIMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 
 class TestMCPAgent:
@@ -205,3 +205,181 @@ class TestMCPAgent:
         simple_agent = agent._create_simple_agent()
         
         assert simple_agent is not None
+    
+    @pytest.mark.asyncio
+    async def test_resource_injection_on_first_message(self, mock_config):
+        """Test that resources are injected on first message"""
+        agent = MCPAgent(mock_config)
+        
+        # Mock the resource handler to return sample resources
+        mock_resource_handler = Mock()
+        mock_resource_handler.list_resources = AsyncMock(return_value=[
+            {"uri": "resource1", "name": "Test Resource 1", "description": "Test description 1", "mimeType": "text/plain"},
+            {"uri": "resource2", "name": "Test Resource 2", "description": "Test description 2", "mimeType": "application/json"}
+        ])
+        agent.resource_handler = mock_resource_handler
+        
+        # Mock the agent's compiled graph
+        mock_graph = Mock()
+        invoked_messages = None
+        
+        async def capture_invoke(input_dict, config):
+            nonlocal invoked_messages
+            invoked_messages = input_dict["messages"]
+            return {"messages": [AIMessage(content="Test response")]}
+        
+        mock_graph.ainvoke = AsyncMock(side_effect=capture_invoke)
+        agent.agent = mock_graph
+        agent._initialized = True
+        
+        # First invocation - should inject resources
+        response = await agent.invoke("Test message", thread_id="test_thread")
+        
+        assert response == "Test response"
+        assert len(invoked_messages) == 2
+        assert isinstance(invoked_messages[0], SystemMessage)
+        assert "Available MCP Resources:" in invoked_messages[0].content
+        assert "Test Resource 1" in invoked_messages[0].content
+        assert "Test Resource 2" in invoked_messages[0].content
+        assert isinstance(invoked_messages[1], HumanMessage)
+        assert invoked_messages[1].content == "Test message"
+        assert "test_thread" in agent._thread_resources_injected
+    
+    @pytest.mark.asyncio
+    async def test_no_resource_injection_on_subsequent_messages(self, mock_config):
+        """Test that resources are NOT injected on subsequent messages"""
+        agent = MCPAgent(mock_config)
+        
+        # Mock the resource handler
+        mock_resource_handler = Mock()
+        mock_resource_handler.list_resources = AsyncMock(return_value=[
+            {"uri": "resource1", "name": "Test Resource 1"}
+        ])
+        agent.resource_handler = mock_resource_handler
+        
+        # Mock the agent's compiled graph
+        mock_graph = Mock()
+        invoked_messages = None
+        
+        async def capture_invoke(input_dict, config):
+            nonlocal invoked_messages
+            invoked_messages = input_dict["messages"]
+            return {"messages": [AIMessage(content="Test response")]}
+        
+        mock_graph.ainvoke = AsyncMock(side_effect=capture_invoke)
+        agent.agent = mock_graph
+        agent._initialized = True
+        
+        # First invocation - should inject resources
+        await agent.invoke("First message", thread_id="test_thread")
+        assert len(invoked_messages) == 2
+        assert isinstance(invoked_messages[0], SystemMessage)
+        
+        # Second invocation - should NOT inject resources
+        await agent.invoke("Second message", thread_id="test_thread")
+        assert len(invoked_messages) == 1
+        assert isinstance(invoked_messages[0], HumanMessage)
+        assert invoked_messages[0].content == "Second message"
+    
+    @pytest.mark.asyncio
+    async def test_no_resource_injection_when_no_resources(self, mock_config):
+        """Test handling when no resources are available"""
+        agent = MCPAgent(mock_config)
+        
+        # Mock the resource handler to return empty list
+        mock_resource_handler = Mock()
+        mock_resource_handler.list_resources = AsyncMock(return_value=[])
+        agent.resource_handler = mock_resource_handler
+        
+        # Mock the agent's compiled graph
+        mock_graph = Mock()
+        invoked_messages = None
+        
+        async def capture_invoke(input_dict, config):
+            nonlocal invoked_messages
+            invoked_messages = input_dict["messages"]
+            return {"messages": [AIMessage(content="Test response")]}
+        
+        mock_graph.ainvoke = AsyncMock(side_effect=capture_invoke)
+        agent.agent = mock_graph
+        agent._initialized = True
+        
+        # Invocation - should not inject resources when none available
+        response = await agent.invoke("Test message", thread_id="test_thread")
+        
+        assert response == "Test response"
+        assert len(invoked_messages) == 1
+        assert isinstance(invoked_messages[0], HumanMessage)
+        assert invoked_messages[0].content == "Test message"
+        assert "test_thread" in agent._thread_resources_injected
+    
+    @pytest.mark.asyncio
+    async def test_resource_injection_error_handling(self, mock_config):
+        """Test error handling when resource fetching fails"""
+        agent = MCPAgent(mock_config)
+        
+        # Mock the resource handler to raise an exception
+        mock_resource_handler = Mock()
+        mock_resource_handler.list_resources = AsyncMock(side_effect=Exception("Failed to fetch resources"))
+        agent.resource_handler = mock_resource_handler
+        
+        # Mock the agent's compiled graph
+        mock_graph = Mock()
+        invoked_messages = None
+        
+        async def capture_invoke(input_dict, config):
+            nonlocal invoked_messages
+            invoked_messages = input_dict["messages"]
+            return {"messages": [AIMessage(content="Test response")]}
+        
+        mock_graph.ainvoke = AsyncMock(side_effect=capture_invoke)
+        agent.agent = mock_graph
+        agent._initialized = True
+        
+        # Invocation - should handle error gracefully
+        response = await agent.invoke("Test message", thread_id="test_thread")
+        
+        assert response == "Test response"
+        assert len(invoked_messages) == 1
+        assert isinstance(invoked_messages[0], HumanMessage)
+        assert invoked_messages[0].content == "Test message"
+        assert "test_thread" in agent._thread_resources_injected
+    
+    @pytest.mark.asyncio
+    async def test_resource_injection_in_stream(self, mock_config):
+        """Test that resources are injected in stream method"""
+        agent = MCPAgent(mock_config)
+        
+        # Mock the resource handler
+        mock_resource_handler = Mock()
+        mock_resource_handler.list_resources = AsyncMock(return_value=[
+            {"uri": "resource1", "name": "Test Resource 1"}
+        ])
+        agent.resource_handler = mock_resource_handler
+        
+        # Mock the agent's compiled graph
+        streamed_messages = None
+        
+        async def capture_stream(input_dict, config):
+            nonlocal streamed_messages
+            streamed_messages = input_dict["messages"]
+            yield {"messages": [AIMessage(content="Part 1")]}
+            yield {"messages": [AIMessage(content="Part 2")]}
+        
+        mock_graph = Mock()
+        mock_graph.astream = capture_stream
+        agent.agent = mock_graph
+        agent._initialized = True
+        
+        # Stream - should inject resources
+        chunks = []
+        async for chunk in agent.stream("Test message", thread_id="stream_thread"):
+            chunks.append(chunk)
+        
+        assert len(chunks) == 2
+        assert len(streamed_messages) == 2
+        assert isinstance(streamed_messages[0], SystemMessage)
+        assert "Available MCP Resources:" in streamed_messages[0].content
+        assert isinstance(streamed_messages[1], HumanMessage)
+        assert streamed_messages[1].content == "Test message"
+        assert "stream_thread" in agent._thread_resources_injected

@@ -43,6 +43,9 @@ class MCPAgent:
         
         # Track initialization state
         self._initialized = False
+        
+        # Track which threads have had resources injected
+        self._thread_resources_injected = {}
     
     async def initialize(self):
         """Initialize the agent asynchronously"""
@@ -157,6 +160,47 @@ class MCPAgent:
         
         return builder.compile(checkpointer=self.checkpointer)
     
+    async def _format_resources_context(self) -> Optional[SystemMessage]:
+        """
+        Format available MCP resources into a SystemMessage for context
+        
+        Returns:
+            SystemMessage with resources information or None if no resources available
+        """
+        try:
+            resources = await self.get_available_resources()
+            
+            if not resources:
+                self.logger.debug("No MCP resources available to inject")
+                return None
+            
+            # Format resources into a readable context
+            context_lines = ["Available MCP Resources:"]
+            context_lines.append("=" * 50)
+            
+            for resource in resources:
+                uri = resource.get('uri', 'Unknown')
+                name = resource.get('name', 'Unnamed Resource')
+                description = resource.get('description', 'No description available')
+                mime_type = resource.get('mimeType', 'Unknown type')
+                
+                context_lines.append(f"\n• Resource: {name}")
+                context_lines.append(f"  URI: {uri}")
+                context_lines.append(f"  Type: {mime_type}")
+                context_lines.append(f"  Description: {description}")
+            
+            context_lines.append("\n" + "=" * 50)
+            context_lines.append("You can use these resources to provide more informed and contextual responses.")
+            
+            context_text = "\n".join(context_lines)
+            
+            self.logger.debug(f"Formatted {len(resources)} resources for context injection")
+            return SystemMessage(content=context_text)
+            
+        except Exception as e:
+            self.logger.error(f"Failed to format resources context: {e}", exc_info=True)
+            return None
+    
     async def invoke(self, message: str, thread_id: str = "default") -> str:
         """
         Invoke the agent with a message
@@ -174,13 +218,29 @@ class MCPAgent:
         self.logger.debug(f"Invoking agent with message: {message[:100]}...")
         
         try:
-            # Prepare input
+            # Prepare messages list
+            messages = []
+            
+            # Check if this is the first message for this thread
+            if thread_id not in self._thread_resources_injected:
+                # Inject resources context on first message
+                resources_context = await self._format_resources_context()
+                if resources_context:
+                    messages.append(resources_context)
+                    self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
+                
+                # Mark thread as having resources injected
+                self._thread_resources_injected[thread_id] = True
+            
+            # Add the user message
             input_message = HumanMessage(content=message)
+            messages.append(input_message)
+            
             config = {"configurable": {"thread_id": thread_id}}
             
             # Invoke agent
             response = await self.agent.ainvoke(
-                {"messages": [input_message]},
+                {"messages": messages},
                 config=config
             )
             
@@ -218,13 +278,29 @@ class MCPAgent:
         self.logger.debug(f"Streaming agent response for: {message[:100]}...")
         
         try:
-            # Prepare input
+            # Prepare messages list
+            messages = []
+            
+            # Check if this is the first message for this thread
+            if thread_id not in self._thread_resources_injected:
+                # Inject resources context on first message
+                resources_context = await self._format_resources_context()
+                if resources_context:
+                    messages.append(resources_context)
+                    self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
+                
+                # Mark thread as having resources injected
+                self._thread_resources_injected[thread_id] = True
+            
+            # Add the user message
             input_message = HumanMessage(content=message)
+            messages.append(input_message)
+            
             config = {"configurable": {"thread_id": thread_id}}
             
             # Stream from agent
             async for chunk in self.agent.astream(
-                {"messages": [input_message]},
+                {"messages": messages},
                 config=config
             ):
                 if chunk:
