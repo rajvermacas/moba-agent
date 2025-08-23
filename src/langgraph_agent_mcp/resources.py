@@ -2,6 +2,8 @@
 Resource Handler for MCP Resources
 """
 
+import asyncio
+import json
 import logging
 from typing import Dict, Any, List, Optional
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -213,3 +215,132 @@ class ResourceHandler:
         
         self.logger.warning(f"Resource not found: {name}")
         return None
+    
+    async def get_all_resources(self, max_content_size: int = 50000) -> List[Dict[str, Any]]:
+        """
+        Get all resources with their actual content fetched
+        
+        This method:
+        1. Lists all available resources
+        2. Fetches the content of each resource
+        3. Returns resources with both metadata and content
+        
+        Args:
+            max_content_size: Maximum size of content to include per resource
+            
+        Returns:
+            List of resources with metadata AND content
+        """
+        self.logger.info("Getting all resources with content")
+        
+        # Step 1: List all available resources
+        resources = await self.list_resources()
+        
+        if not resources:
+            self.logger.info("No resources available to fetch")
+            return []
+        
+        self.logger.info(f"Found {len(resources)} resources, fetching content...")
+        
+        # Step 2: Fetch content for each resource in parallel
+        async def fetch_resource_with_metadata(resource: Dict[str, Any]) -> Dict[str, Any]:
+            """Helper function to fetch a single resource with its metadata"""
+            resource_uri = resource.get('uri')
+            
+            if not resource_uri:
+                self.logger.warning(f"Resource {resource.get('name', 'Unknown')} has no URI")
+                return {
+                    **resource,
+                    'content': None,
+                    'fetch_status': 'no_uri'
+                }
+            
+            try:
+                # Fetch the actual content
+                self.logger.debug(f"Fetching content for: {resource_uri}")
+                content = await self.fetch_resource(resource_uri)
+                
+                # Format content based on type
+                content_str = None
+                if content:
+                    if isinstance(content, str):
+                        content_str = content
+                        if len(content_str) > max_content_size:
+                            content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
+                    elif isinstance(content, dict):
+                        # Check if it's processed content with text/data fields
+                        if 'text' in content:
+                            content_str = content['text']
+                            if isinstance(content_str, str) and len(content_str) > max_content_size:
+                                content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
+                        elif 'data' in content:
+                            try:
+                                content_str = json.dumps(content['data'], indent=2)
+                                if len(content_str) > max_content_size:
+                                    content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
+                            except:
+                                content_str = str(content['data'])[:max_content_size]
+                        else:
+                            try:
+                                content_str = json.dumps(content, indent=2)
+                                if len(content_str) > max_content_size:
+                                    content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
+                            except:
+                                content_str = str(content)[:max_content_size]
+                    elif isinstance(content, list):
+                        # Handle list of content items
+                        if content and isinstance(content[0], dict):
+                            # Process first item if it's a list of dicts
+                            first_item = content[0]
+                            if 'text' in first_item:
+                                content_str = first_item['text']
+                            elif 'data' in first_item:
+                                content_str = json.dumps(first_item['data'], indent=2)
+                            else:
+                                content_str = json.dumps(content, indent=2)
+                        else:
+                            try:
+                                content_str = json.dumps(content, indent=2)
+                            except:
+                                content_str = str(content)
+                        
+                        if content_str and len(content_str) > max_content_size:
+                            content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
+                    else:
+                        content_str = str(content)
+                        if len(content_str) > max_content_size:
+                            content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
+                
+                self.logger.debug(f"Successfully fetched content for: {resource_uri}")
+                return {
+                    **resource,
+                    'content': content_str,
+                    'fetch_status': 'success'
+                }
+                
+            except Exception as e:
+                self.logger.error(f"Failed to fetch resource {resource_uri}: {e}")
+                return {
+                    **resource,
+                    'content': None,
+                    'fetch_status': 'failed',
+                    'fetch_error': str(e)
+                }
+        
+        # Fetch all resources in parallel for better performance
+        try:
+            resources_with_content = await asyncio.gather(
+                *[fetch_resource_with_metadata(r) for r in resources],
+                return_exceptions=False
+            )
+            
+            # Count successful fetches
+            successful_fetches = sum(1 for r in resources_with_content if r.get('fetch_status') == 'success')
+            self.logger.info(f"Successfully fetched content for {successful_fetches}/{len(resources)} resources")
+            
+            return resources_with_content
+            
+        except Exception as e:
+            self.logger.error(f"Failed to fetch resources in parallel: {e}", exc_info=True)
+            # Fallback to returning resources without content
+            return [{**r, 'content': None, 'fetch_status': 'failed', 'fetch_error': str(e)} for r in resources]
