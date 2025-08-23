@@ -1,0 +1,36 @@
+{
+  "mcp_servers": [
+    {
+      "name": "mherb_mcp_server",
+      "transport": "sse",
+      "url": "http://localhost:8000/sse",
+      "enabled": true,
+      "reconnect": {
+        "enabled": true,
+        "max_attempts": 5,
+        "delay_ms": 1000
+      }
+    },
+    {
+      "name": "filesystem_server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "enabled": true
+    },
+    {
+      "name": "github_server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "enabled": false
+    }
+  ],
+  "default_settings": {
+    "timeout_ms": 30000,
+    "log_level": "INFO"
+  }
+}

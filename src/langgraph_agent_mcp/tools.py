@@ -21,7 +21,8 @@ class ToolHandler:
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.mcp_client = None
-        self.server_name = config.mcp_server_name
+        # Get list of server names from config
+        self.server_names = [server['name'] for server in config.mcp_servers]
     
     def set_client(self, mcp_client: MultiServerMCPClient):
         """

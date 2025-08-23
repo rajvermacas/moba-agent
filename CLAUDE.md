@@ -1,0 +1,2 @@
+- Use serena mcp tool
+- Use context7 mcp tool

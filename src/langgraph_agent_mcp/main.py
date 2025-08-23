@@ -49,7 +49,8 @@ class MCPAgentApp:
         print("\n" + "="*60)
         print("🤖 LangGraph MCP Agent with Gemini 2.5 Flash")
         print("="*60)
-        print(f"Connected to MCP Server: {self.config.mcp_server_url}")
+        server_names = [server['name'] for server in self.config.mcp_servers]
+        print(f"Connected to {len(server_names)} MCP Servers: {', '.join(server_names)}")
         print(f"Using model: {self.config.agent_model}")
         print("="*60)
     

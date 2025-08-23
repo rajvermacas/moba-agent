@@ -1,0 +1,115 @@
+{
+  "mcp_servers": [
+    {
+      "name": "mherb_mcp_server",
+      "transport": "sse",
+      "url": "http://localhost:8000/sse",
+      "enabled": true,
+      "reconnect": {
+        "enabled": true,
+        "max_attempts": 5,
+        "delay_ms": 1000
+      },
+      "description": "SSE-based MCP server for general purposes"
+    },
+    {
+      "name": "filesystem_server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem"],
+      "enabled": true,
+      "description": "MCP server for filesystem operations"
+    },
+    {
+      "name": "github_server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-github"],
+      "env": {
+        "GITHUB_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "enabled": false,
+      "description": "GitHub MCP server (requires GITHUB_TOKEN environment variable)"
+    },
+    {
+      "name": "slack_server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {
+        "SLACK_BOT_TOKEN": "${SLACK_BOT_TOKEN}",
+        "SLACK_TEAM_ID": "${SLACK_TEAM_ID}"
+      },
+      "enabled": false,
+      "description": "Slack MCP server (requires SLACK_BOT_TOKEN and SLACK_TEAM_ID)"
+    },
+    {
+      "name": "postgres_server",
+      "transport": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-postgres"],
+      "env": {
+        "POSTGRES_CONNECTION_STRING": "${POSTGRES_CONNECTION_STRING}"
+      },
+      "enabled": false,
+      "description": "PostgreSQL database MCP server"
+    },
+    {
+      "name": "http_api_server",
+      "transport": "http",
+      "url": "http://localhost:9000/api",
+      "headers": {
+        "Authorization": "Bearer ${API_TOKEN}"
+      },
+      "enabled": false,
+      "description": "HTTP-based MCP server for API interactions"
+    },
+    {
+      "name": "websocket_server",
+      "transport": "websocket",
+      "url": "ws://localhost:8080/ws",
+      "enabled": false,
+      "description": "WebSocket-based MCP server for real-time communication"
+    },
+    {
+      "name": "custom_python_server",
+      "transport": "stdio",
+      "command": "python",
+      "args": ["-m", "my_custom_mcp_server"],
+      "env": {
+        "CUSTOM_CONFIG": "${CUSTOM_CONFIG_PATH}"
+      },
+      "enabled": false,
+      "description": "Custom Python-based MCP server"
+    },
+    {
+      "name": "docker_server",
+      "transport": "stdio",
+      "command": "docker",
+      "args": ["run", "--rm", "-i", "my-mcp-server:latest"],
+      "enabled": false,
+      "description": "MCP server running in a Docker container"
+    },
+    {
+      "name": "kubernetes_server",
+      "transport": "http",
+      "url": "https://mcp-server.k8s.local/api",
+      "tls": {
+        "cert": "${K8S_CLIENT_CERT_PATH}",
+        "key": "${K8S_CLIENT_KEY_PATH}",
+        "ca": "${K8S_CA_CERT_PATH}"
+      },
+      "enabled": false,
+      "description": "MCP server deployed in Kubernetes with TLS"
+    }
+  ],
+  "default_settings": {
+    "timeout_ms": 30000,
+    "log_level": "INFO",
+    "retry_policy": {
+      "max_retries": 3,
+      "backoff_multiplier": 2
+    }
+  },
+  "_comment": "This is an example configuration file showing various MCP server types. Enable servers by setting 'enabled': true and ensure required environment variables are set."
+}

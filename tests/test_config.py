@@ -17,12 +17,15 @@ class TestConfig:
             'GOOGLE_API_KEY': 'test-api-key',
             'MCP_SERVER_URL': 'http://test:8000/mcp',
             'AGENT_MODEL': 'gemini-2.5-flash',
-            'LOG_LEVEL': 'INFO'
+            'LOG_LEVEL': 'INFO',
+            'MCP_CONFIG_FILE': 'non_existent.json'  # Force env var fallback
         }):
             config = Config()
             
             assert config.google_api_key == 'test-api-key'
-            assert config.mcp_server_url == 'http://test:8000/mcp'
+            # MCP servers are now loaded into a list
+            assert len(config.mcp_servers) == 1
+            assert config.mcp_servers[0]['url'] == 'http://test:8000/mcp'
             assert config.agent_model == 'gemini-2.5-flash'
             assert config.log_level == 'INFO'
     
@@ -39,9 +42,10 @@ class TestConfig:
         """Test config validation fails with missing server URL"""
         with patch.dict(os.environ, {
             'GOOGLE_API_KEY': 'test-key',
-            'MCP_SERVER_URL': ''
+            'MCP_SERVER_URL': '',
+            'MCP_CONFIG_FILE': 'non_existent.json'  # Force env var fallback
         }, clear=True):
-            with pytest.raises(ValueError, match="MCP_SERVER_URL is required"):
+            with pytest.raises(ValueError, match="No MCP servers configured"):
                 Config()
     
     def test_get_mcp_server_config(self):
@@ -53,7 +57,8 @@ class TestConfig:
             'MCP_TRANSPORT': 'streamable_http',
             'SSE_RECONNECT_ENABLED': 'true',
             'SSE_RECONNECT_MAX_ATTEMPTS': '3',
-            'SSE_RECONNECT_DELAY_MS': '2000'
+            'SSE_RECONNECT_DELAY_MS': '2000',
+            'MCP_CONFIG_FILE': 'non_existent.json'  # Force env var fallback
         }):
             config = Config()
             server_config = config.get_mcp_server_config()
@@ -61,22 +66,24 @@ class TestConfig:
             assert 'test_server' in server_config
             assert server_config['test_server']['transport'] == 'streamable_http'
             assert server_config['test_server']['url'] == 'http://test:8000/mcp'
-            assert server_config['test_server']['reconnect']['enabled'] == True
-            assert server_config['test_server']['reconnect']['maxAttempts'] == 3
-            assert server_config['test_server']['reconnect']['delayMs'] == 2000
+            # Note: reconnect parameters are stored but not passed to MultiServerMCPClient
     
     def test_get_mcp_server_config_no_reconnect(self):
         """Test MCP server config without reconnection"""
         with patch.dict(os.environ, {
             'GOOGLE_API_KEY': 'test-key',
             'MCP_SERVER_URL': 'http://test:8000/mcp',
-            'MCP_TRANSPORT': 'stdio',
-            'SSE_RECONNECT_ENABLED': 'false'
+            'MCP_SERVER_NAME': 'test_server',
+            'MCP_TRANSPORT': 'sse',  # Use SSE instead of stdio to avoid command requirement
+            'SSE_RECONNECT_ENABLED': 'false',
+            'MCP_CONFIG_FILE': 'non_existent.json'  # Force env var fallback
         }):
             config = Config()
             server_config = config.get_mcp_server_config()
             
-            assert 'reconnect' not in server_config[config.mcp_server_name]
+            # The MultiServerMCPClient configuration doesn't include reconnect parameters
+            assert 'test_server' in server_config
+            assert 'reconnect' not in server_config['test_server']
     
     def test_get_gemini_config(self):
         """Test Gemini configuration generation"""

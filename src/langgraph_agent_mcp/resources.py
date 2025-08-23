@@ -22,7 +22,8 @@ class ResourceHandler:
         self.config = config
         self.logger = logging.getLogger(__name__)
         self.mcp_client = None
-        self.server_name = config.mcp_server_name
+        # Get list of server names from config
+        self.server_names = [server['name'] for server in config.mcp_servers]
     
     def set_client(self, mcp_client: MultiServerMCPClient):
         """
@@ -36,91 +37,107 @@ class ResourceHandler:
     
     async def list_resources(self) -> List[Dict[str, Any]]:
         """
-        List all available resources from MCP server
+        List all available resources from all MCP servers
         
         Returns:
-            List of resource descriptions
+            List of resource descriptions from all servers
         """
-        self.logger.debug("Listing MCP resources")
+        self.logger.debug("Listing MCP resources from all servers")
         
         if not self.mcp_client:
             self.logger.error("MCP client not initialized")
             return []
         
-        try:
-            # Get session for the server
-            async with self.mcp_client.session(self.server_name) as session:
-                # List available resources
-                resources_response = await session.list_resources()
-                
-                if hasattr(resources_response, 'resources'):
-                    resources = resources_response.resources
-                else:
-                    resources = resources_response if isinstance(resources_response, list) else []
-                
-                resource_count = len(resources)
-                self.logger.info(f"Found {resource_count} resources")
-                
-                # Format resources for return
-                formatted_resources = []
-                for resource in resources:
-                    formatted = self._format_resource(resource)
-                    formatted_resources.append(formatted)
-                    self.logger.debug(f"Resource: {formatted['uri']} - {formatted.get('name', 'N/A')}")
-                
-                return formatted_resources
-                
-        except Exception as e:
-            self.logger.error(f"Failed to list resources: {e}", exc_info=True)
-            return []
+        all_resources = []
+        
+        # Iterate through all configured servers
+        for server_name in self.server_names:
+            try:
+                # Get session for the server
+                async with self.mcp_client.session(server_name) as session:
+                    # List available resources
+                    resources_response = await session.list_resources()
+                    
+                    if hasattr(resources_response, 'resources'):
+                        resources = resources_response.resources
+                    else:
+                        resources = resources_response if isinstance(resources_response, list) else []
+                    
+                    resource_count = len(resources)
+                    self.logger.info(f"Found {resource_count} resources from server '{server_name}'")
+                    
+                    # Format resources for return, adding server name
+                    for resource in resources:
+                        formatted = self._format_resource(resource)
+                        formatted['server'] = server_name  # Track which server this resource came from
+                        all_resources.append(formatted)
+                        self.logger.debug(f"Resource from {server_name}: {formatted['uri']} - {formatted.get('name', 'N/A')}")
+                    
+            except Exception as e:
+                self.logger.error(f"Failed to list resources from server '{server_name}': {e}")
+                # Continue with other servers even if one fails
+                continue
+        
+        self.logger.info(f"Total resources from all servers: {len(all_resources)}")
+        return all_resources
     
-    async def fetch_resource(self, resource_uri: str) -> Any:
+    async def fetch_resource(self, resource_uri: str, server_name: Optional[str] = None) -> Any:
         """
         Fetch a specific resource from MCP server
         
         Args:
             resource_uri: URI of the resource to fetch
+            server_name: Optional server name to fetch from (if not provided, tries all servers)
             
         Returns:
             Resource content (no caching)
         """
-        self.logger.debug(f"Fetching resource: {resource_uri}")
+        self.logger.debug(f"Fetching resource: {resource_uri} from server: {server_name or 'any'}")
         
         if not self.mcp_client:
             self.logger.error("MCP client not initialized")
             return None
         
-        try:
-            # Get session for the server
-            async with self.mcp_client.session(self.server_name) as session:
-                # Fetch the resource
-                resource_response = await session.read_resource(resource_uri)
-                
-                # Extract content
-                if hasattr(resource_response, 'contents'):
-                    contents = resource_response.contents
-                elif hasattr(resource_response, 'content'):
-                    contents = resource_response.content
-                else:
-                    contents = resource_response
-                
-                self.logger.info(f"Successfully fetched resource: {resource_uri}")
-                
-                # Process contents based on type
-                if isinstance(contents, list):
-                    # Multiple content items
-                    processed_contents = []
-                    for item in contents:
-                        processed_item = self._process_content_item(item)
-                        processed_contents.append(processed_item)
-                    return processed_contents
-                else:
-                    # Single content item
-                    return self._process_content_item(contents)
-                
-        except Exception as e:
-            self.logger.error(f"Failed to fetch resource {resource_uri}: {e}", exc_info=True)
-            return None
+        # If server_name is provided, try only that server
+        servers_to_try = [server_name] if server_name else self.server_names
+        
+        for server in servers_to_try:
+            try:
+                # Get session for the server
+                async with self.mcp_client.session(server) as session:
+                    # Fetch the resource
+                    resource_response = await session.read_resource(resource_uri)
+                    
+                    # Extract content
+                    if hasattr(resource_response, 'contents'):
+                        contents = resource_response.contents
+                    elif hasattr(resource_response, 'content'):
+                        contents = resource_response.content
+                    else:
+                        contents = resource_response
+                    
+                    self.logger.info(f"Successfully fetched resource: {resource_uri} from server: {server}")
+                    
+                    # Process contents based on type
+                    if isinstance(contents, list):
+                        # Multiple content items
+                        processed_contents = []
+                        for item in contents:
+                            processed_item = self._process_content_item(item)
+                            processed_contents.append(processed_item)
+                        return processed_contents
+                    else:
+                        # Single content item
+                        return self._process_content_item(contents)
+                    
+            except Exception as e:
+                self.logger.warning(f"Failed to fetch resource {resource_uri} from server '{server}': {e}")
+                # Continue trying other servers if this one fails
+                continue
+        
+        # If we get here, all servers failed
+        self.logger.error(f"Failed to fetch resource {resource_uri} from any server")
+        return None
     
     def _format_resource(self, resource: Any) -> Dict[str, Any]:
         """
@@ -256,9 +273,10 @@ class ResourceHandler:
                 }
             
             try:
-                # Fetch the actual content
-                self.logger.debug(f"Fetching content for: {resource_uri}")
-                content = await self.fetch_resource(resource_uri)
+                # Fetch the actual content from the specific server
+                server_name = resource.get('server')
+                self.logger.debug(f"Fetching content for: {resource_uri} from server: {server_name}")
+                content = await self.fetch_resource(resource_uri, server_name)
                 
                 # Format content based on type
                 content_str = None

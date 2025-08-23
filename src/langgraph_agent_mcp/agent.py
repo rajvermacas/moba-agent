@@ -87,7 +87,8 @@ class MCPAgent:
             self.resource_handler.set_client(self.mcp_client)
             self.tool_handler.set_client(self.mcp_client)
             
-            self.logger.info(f"MCP client initialized with server: {self.config.mcp_server_name}")
+            server_names = [server['name'] for server in self.config.mcp_servers]
+            self.logger.info(f"MCP client initialized with {len(server_names)} servers: {', '.join(server_names)}")
             
         except Exception as e:
             self.logger.error(f"Failed to initialize MCP client: {e}")
