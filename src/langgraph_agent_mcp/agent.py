@@ -165,36 +165,62 @@ class MCPAgent:
         Format available MCP resources into a SystemMessage for context
         
         Returns:
-            SystemMessage with resources information or None if no resources available
+            SystemMessage with resources information AND their content
         """
         try:
-            resources = await self.get_available_resources()
+            # Use get_all_resources to fetch both metadata and content
+            resources = await self.resource_handler.get_all_resources(max_content_size=10000)
             
             if not resources:
                 self.logger.debug("No MCP resources available to inject")
                 return None
             
-            # Format resources into a readable context
-            context_lines = ["Available MCP Resources:"]
-            context_lines.append("=" * 50)
+            # Format resources into a readable context with their content
+            context_lines = ["Available MCP Resources with Content:"]
+            context_lines.append("=" * 70)
             
             for resource in resources:
                 uri = resource.get('uri', 'Unknown')
                 name = resource.get('name', 'Unnamed Resource')
                 description = resource.get('description', 'No description available')
                 mime_type = resource.get('mimeType', 'Unknown type')
+                content = resource.get('content')
+                fetch_status = resource.get('fetch_status', 'unknown')
                 
                 context_lines.append(f"\n• Resource: {name}")
                 context_lines.append(f"  URI: {uri}")
                 context_lines.append(f"  Type: {mime_type}")
                 context_lines.append(f"  Description: {description}")
+                
+                # Include the actual content if successfully fetched
+                if fetch_status == 'success' and content:
+                    context_lines.append(f"  Status: Successfully fetched")
+                    context_lines.append(f"  Content:")
+                    # Indent the content for better readability
+                    content_lines = content.split('\n')
+                    for line in content_lines[:50]:  # Limit lines shown per resource
+                        context_lines.append(f"    {line}")
+                    if len(content_lines) > 50:
+                        context_lines.append(f"    ... ({len(content_lines) - 50} more lines)")
+                elif fetch_status == 'failed':
+                    error = resource.get('fetch_error', 'Unknown error')
+                    context_lines.append(f"  Status: Failed to fetch - {error}")
+                elif fetch_status == 'no_uri':
+                    context_lines.append(f"  Status: No URI available for fetching")
+                else:
+                    context_lines.append(f"  Status: Content not available")
+                
+                context_lines.append("")  # Add blank line between resources
             
-            context_lines.append("\n" + "=" * 50)
-            context_lines.append("You can use these resources to provide more informed and contextual responses.")
+            context_lines.append("=" * 70)
+            context_lines.append("You have access to the above resources with their content. Use this information to provide more informed and contextual responses.")
             
             context_text = "\n".join(context_lines)
             
-            self.logger.debug(f"Formatted {len(resources)} resources for context injection")
+            # Count successful fetches
+            successful_fetches = sum(1 for r in resources if r.get('fetch_status') == 'success')
+            self.logger.info(f"Formatted {len(resources)} resources for context injection ({successful_fetches} with content)")
+            
             return SystemMessage(content=context_text)
             
         except Exception as e:

@@ -211,11 +211,25 @@ class TestMCPAgent:
         """Test that resources are injected on first message"""
         agent = MCPAgent(mock_config)
         
-        # Mock the resource handler to return sample resources
+        # Mock the resource handler to return sample resources with content
         mock_resource_handler = Mock()
-        mock_resource_handler.list_resources = AsyncMock(return_value=[
-            {"uri": "resource1", "name": "Test Resource 1", "description": "Test description 1", "mimeType": "text/plain"},
-            {"uri": "resource2", "name": "Test Resource 2", "description": "Test description 2", "mimeType": "application/json"}
+        mock_resource_handler.get_all_resources = AsyncMock(return_value=[
+            {
+                "uri": "resource1", 
+                "name": "Test Resource 1", 
+                "description": "Test description 1", 
+                "mimeType": "text/plain",
+                "content": "This is the content of resource 1",
+                "fetch_status": "success"
+            },
+            {
+                "uri": "resource2", 
+                "name": "Test Resource 2", 
+                "description": "Test description 2", 
+                "mimeType": "application/json",
+                "content": '{"key": "value"}',
+                "fetch_status": "success"
+            }
         ])
         agent.resource_handler = mock_resource_handler
         
@@ -238,7 +252,7 @@ class TestMCPAgent:
         assert response == "Test response"
         assert len(invoked_messages) == 2
         assert isinstance(invoked_messages[0], SystemMessage)
-        assert "Available MCP Resources:" in invoked_messages[0].content
+        assert "Available MCP Resources with Content:" in invoked_messages[0].content
         assert "Test Resource 1" in invoked_messages[0].content
         assert "Test Resource 2" in invoked_messages[0].content
         assert isinstance(invoked_messages[1], HumanMessage)
@@ -252,8 +266,13 @@ class TestMCPAgent:
         
         # Mock the resource handler
         mock_resource_handler = Mock()
-        mock_resource_handler.list_resources = AsyncMock(return_value=[
-            {"uri": "resource1", "name": "Test Resource 1"}
+        mock_resource_handler.get_all_resources = AsyncMock(return_value=[
+            {
+                "uri": "resource1", 
+                "name": "Test Resource 1",
+                "content": "Test content",
+                "fetch_status": "success"
+            }
         ])
         agent.resource_handler = mock_resource_handler
         
@@ -288,7 +307,7 @@ class TestMCPAgent:
         
         # Mock the resource handler to return empty list
         mock_resource_handler = Mock()
-        mock_resource_handler.list_resources = AsyncMock(return_value=[])
+        mock_resource_handler.get_all_resources = AsyncMock(return_value=[])
         agent.resource_handler = mock_resource_handler
         
         # Mock the agent's compiled graph
@@ -320,7 +339,7 @@ class TestMCPAgent:
         
         # Mock the resource handler to raise an exception
         mock_resource_handler = Mock()
-        mock_resource_handler.list_resources = AsyncMock(side_effect=Exception("Failed to fetch resources"))
+        mock_resource_handler.get_all_resources = AsyncMock(side_effect=Exception("Failed to fetch resources"))
         agent.resource_handler = mock_resource_handler
         
         # Mock the agent's compiled graph
@@ -352,8 +371,13 @@ class TestMCPAgent:
         
         # Mock the resource handler
         mock_resource_handler = Mock()
-        mock_resource_handler.list_resources = AsyncMock(return_value=[
-            {"uri": "resource1", "name": "Test Resource 1"}
+        mock_resource_handler.get_all_resources = AsyncMock(return_value=[
+            {
+                "uri": "resource1", 
+                "name": "Test Resource 1",
+                "content": "Test content",
+                "fetch_status": "success"
+            }
         ])
         agent.resource_handler = mock_resource_handler
         

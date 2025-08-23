@@ -29,9 +29,10 @@ async def demo_resource_injection():
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
     
-    print("=" * 60)
+    print("=" * 70)
     print("MCP Resource Injection Demo")
-    print("=" * 60)
+    print("Enhanced: Now with full resource content fetching!")
+    print("=" * 70)
     print()
     
     try:
@@ -43,14 +44,31 @@ async def demo_resource_injection():
         print("Agent initialized successfully!")
         print()
         
-        # Check available resources
-        resources = await agent.get_available_resources()
-        if resources:
-            print(f"Found {len(resources)} available MCP resources:")
-            for resource in resources[:3]:  # Show first 3 resources
-                print(f"  - {resource.get('name', 'Unnamed')}: {resource.get('uri', 'Unknown URI')}")
-            if len(resources) > 3:
-                print(f"  ... and {len(resources) - 3} more resources")
+        # Check available resources and their content
+        print("Fetching all resources with content...")
+        resources_with_content = await agent.resource_handler.get_all_resources(max_content_size=500)
+        
+        if resources_with_content:
+            print(f"Found {len(resources_with_content)} available MCP resources:")
+            successful_fetches = sum(1 for r in resources_with_content if r.get('fetch_status') == 'success')
+            print(f"Successfully fetched content for {successful_fetches}/{len(resources_with_content)} resources")
+            print()
+            
+            for resource in resources_with_content[:2]:  # Show first 2 resources
+                print(f"  Resource: {resource.get('name', 'Unnamed')}")
+                print(f"    URI: {resource.get('uri', 'Unknown URI')}")
+                print(f"    Type: {resource.get('mimeType', 'Unknown')}")
+                print(f"    Status: {resource.get('fetch_status', 'unknown')}")
+                
+                if resource.get('fetch_status') == 'success' and resource.get('content'):
+                    content_preview = resource['content'][:100] if len(resource['content']) > 100 else resource['content']
+                    print(f"    Content Preview: {content_preview}...")
+                elif resource.get('fetch_status') == 'failed':
+                    print(f"    Error: {resource.get('fetch_error', 'Unknown error')}")
+                print()
+            
+            if len(resources_with_content) > 2:
+                print(f"  ... and {len(resources_with_content) - 2} more resources")
         else:
             print("No MCP resources available. Resources would be injected if available.")
         print()
@@ -116,16 +134,18 @@ async def demo_resource_injection():
         print()
         
         # Final status
-        print("=" * 60)
+        print("=" * 70)
         print("Demo Complete!")
-        print("=" * 60)
+        print("=" * 70)
         print()
         print("Key Features Demonstrated:")
-        print("✓ Resources automatically injected on first message per thread")
+        print("✓ Resources automatically fetched with full content")
+        print("✓ Content injected into LLM context on first message")
         print("✓ No duplicate injection on subsequent messages in same thread")
-        print("✓ Each new thread gets fresh resource context")
+        print("✓ Each new thread gets fresh resource context with content")
         print("✓ Works with both invoke() and stream() methods")
-        print("✓ Graceful handling when no resources available")
+        print("✓ Parallel fetching for better performance")
+        print("✓ Graceful handling of fetch failures and missing resources")
         
     except Exception as e:
         print(f"Error during demo: {e}")
