@@ -1,62 +1,88 @@
-# LangGraph Agent with MCP Integration
+# MOBA Agent - Integrated MCP & REST API Server
 
-A powerful LangGraph agent that integrates with MCP (Model Context Protocol) servers using Google's Gemini 2.5 Flash as the LLM brain. This agent can discover and use tools and resources from any MCP server via SSE/Streamable HTTP protocol.
+A powerful LangGraph agent that integrates with MCP (Model Context Protocol) servers using Google's Gemini 2.5 Flash as the LLM brain, with an integrated REST API server providing OpenAI-compatible endpoints.
 
-## Features
+## 🚀 Key Features
 
+### Core Agent Features
 - 🤖 **Gemini 2.5 Flash Integration**: Uses Google's latest Gemini model for intelligent responses
-- 🔌 **MCP Server Integration**: Connects to MCP servers via SSE/Streamable HTTP protocol
+- 🔌 **Multi-MCP Server Support**: Connects to multiple MCP servers simultaneously
 - 🛠️ **Dynamic Tool Discovery**: Automatically discovers and uses tools from MCP servers
 - 📚 **Resource Management**: Lists and fetches resources from MCP servers
-- 🎯 **Automatic Resource Context Injection**: Automatically injects available MCP resources into the LLM context on first message
+- 🎯 **Automatic Resource Context Injection**: Automatically injects available MCP resources into the LLM context
 - 💬 **Interactive Chat**: Provides both standard and streaming chat interfaces
 - 🔄 **Stateful Conversations**: Maintains conversation context with checkpointing
-- 📊 **Comprehensive Logging**: Detailed logging for debugging and monitoring
-- 🧪 **Well-Tested**: Includes comprehensive unit tests
 
-## Architecture
+### REST API Server Features
+- 🌐 **OpenAI-Compatible API**: Full compatibility with OpenAI chat completions format
+- 🔒 **Zero Code Duplication**: Single implementation for all MCP/LLM logic
+- ⚡ **Direct Integration**: No network overhead between components
+- 🎨 **CORS Support**: Ready for React/web frontend integration
+- 📊 **Health & Status Endpoints**: Monitor system health and MCP connections
+- 🧪 **Integration Testing**: Built-in test endpoints
+
+## 🏗️ Architecture
 
 ```
-┌─────────────────────────────────────────┐
-│         LangGraph Agent                  │
-│  ┌────────────────────────────────┐     │
-│  │    Gemini 2.5 Flash LLM        │     │
-│  └────────────────────────────────┘     │
-│              ▲                           │
-│              │                           │
-│  ┌────────────────────────────────┐     │
-│  │    LangGraph StateGraph         │     │
-│  └────────────────────────────────┘     │
-│              ▲                           │
-│              │                           │
-│  ┌────────────────────────────────┐     │
-│  │  MultiServerMCPClient           │     │
-│  └────────────────────────────────┘     │
-└─────────────▲───────────────────────────┘
-              │
-              │ SSE/Streamable HTTP
-              │
-    ┌─────────▼───────────────┐
-    │    MCP Server            │
-    │  - Tools                 │
-    │  - Resources             │
-    └──────────────────────────┘
+┌─────────────────────────────────────────────────┐
+│              REST API Client                     │
+└────────────────┬─────────────────────────────────┘
+                 │ HTTP/REST
+                 ▼
+┌─────────────────────────────────────────────────┐
+│            moba_server (FastAPI)                 │
+│  ┌──────────────────────────────────────────┐   │
+│  │  Endpoints (all paths preserved):        │   │
+│  │  • POST /chat/completions                │   │
+│  │  • GET /health                           │   │
+│  │  • GET /models                           │   │
+│  │  • GET /mcp/status                       │   │
+│  │  • GET /debug/agent                      │   │
+│  └──────────────────────────────────────────┘   │
+│                      │                           │
+│                      ▼                           │
+│  ┌──────────────────────────────────────────┐   │
+│  │       ChatCompletionHandler              │   │
+│  │    (Delegates to MCPAgent)               │   │
+│  └──────────────────────────────────────────┘   │
+└─────────────────────┬────────────────────────────┘
+                      │ Direct Library Import
+                      ▼
+┌─────────────────────────────────────────────────┐
+│            moba_agent (MCPAgent)                 │
+│  ┌──────────────────────────────────────────┐   │
+│  │      Gemini 2.5 Flash LLM                │   │
+│  └──────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────┐   │
+│  │      LangGraph StateGraph                │   │
+│  └──────────────────────────────────────────┘   │
+│  ┌──────────────────────────────────────────┐   │
+│  │      Multi-MCP Client Support            │   │
+│  └──────────────────────────────────────────┘   │
+└─────────────────────┬────────────────────────────┘
+                      │ MCP Protocol
+                      ▼
+         ┌────────────────────────┐
+         │    MCP Servers          │
+         │  - Tools               │
+         │  - Resources           │
+         └────────────────────────┘
 ```
 
-## Installation
+## 📦 Installation
 
 ### Prerequisites
 
 - Python 3.9 or higher
 - Google API Key for Gemini
-- Running MCP server at localhost:8000 (or custom URL)
+- MCP server(s) configured in `mcp_servers.json`
 
 ### Setup
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/langgraph-agent-mcp.git
-cd langgraph-agent-mcp
+git clone https://github.com/yourusername/moba-agent.git
+cd moba-agent
 ```
 
 2. Create a virtual environment:
@@ -75,68 +101,119 @@ poetry install
 4. Set up environment variables:
 ```bash
 cp .env.example .env
-# Edit .env and add your Google API key and MCP server URL
+# Edit .env and add your Google API key
 ```
 
-## Configuration
+## ⚙️ Configuration
 
-Create a `.env` file with the following variables:
+### Environment Variables (.env)
 
 ```env
-# Google Gemini API Key (required)
+# ===================================
+# MOBA Agent Configuration
+# ===================================
+
+# Google Gemini API Key (Required)
 GOOGLE_API_KEY=your_google_api_key_here
 
 # MCP Server Configuration
-MCP_SERVER_URL=http://localhost:8000/mcp
-MCP_SERVER_NAME=mcp_server
-MCP_TRANSPORT=streamable_http  # or "sse"
+MCP_CONFIG_FILE=mcp_servers.json
 
 # Agent Configuration
 AGENT_MODEL=gemini-2.5-flash
 AGENT_TEMPERATURE=0.1
 AGENT_MAX_TOKENS=4096
 
+# ===================================
+# FastAPI Server Configuration
+# ===================================
+
+# Server Host and Port
+FASTAPI_HOST=0.0.0.0
+FASTAPI_PORT=8001
+
+# CORS Configuration
+ALLOW_CORS=true
+
 # Logging
-LOG_LEVEL=DEBUG
-
-# SSE Reconnection Settings
-SSE_RECONNECT_ENABLED=true
-SSE_RECONNECT_MAX_ATTEMPTS=5
-SSE_RECONNECT_DELAY_MS=1000
+LOG_LEVEL=INFO
 ```
 
-## Usage
+### MCP Servers Configuration (mcp_servers.json)
 
-### Interactive Chat
+```json
+{
+  "servers": {
+    "mherb": {
+      "transport": "sse",
+      "url": "http://localhost:8000/sse"
+    },
+    "fetch": {
+      "transport": "stdio",
+      "command": "uvx",
+      "args": ["mcp-server-fetch"]
+    }
+  }
+}
+```
 
-Run the agent in interactive mode:
+## 🚀 Usage
+
+### Running the REST API Server
 
 ```bash
+# Start the FastAPI server
+python -m src.moba_server.main
+
+# Or use uvicorn directly
+uvicorn src.moba_server.main:app --host 0.0.0.0 --port 8001
+```
+
+The server will be available at `http://localhost:8001`
+
+### API Endpoints
+
+#### Chat Completions (OpenAI-Compatible)
+```bash
+curl -X POST http://localhost:8001/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "messages": [
+      {"role": "user", "content": "How many customers are in the database?"}
+    ]
+  }'
+```
+
+#### Health Check
+```bash
+curl http://localhost:8001/health
+```
+
+#### List Models
+```bash
+curl http://localhost:8001/models
+```
+
+#### MCP Status
+```bash
+curl http://localhost:8001/mcp/status
+```
+
+### Interactive CLI Mode
+
+```bash
+# Run the agent in interactive mode
 python scripts/run_agent.py
-```
 
-Or with streaming responses:
-
-```bash
+# With streaming responses
 python scripts/run_agent.py --stream
 ```
-
-### Available Commands
-
-In interactive mode, you can use these commands:
-
-- `help` - Show available commands
-- `tools` - List available MCP tools
-- `resources` - List available MCP resources
-- `resource <uri>` - Fetch a specific resource
-- `clear` - Clear conversation history
-- `quit` - Exit the application
 
 ### Python API
 
 ```python
 import asyncio
-from src.moba_agent import MCPAgent, Config
+from moba_agent import MCPAgent, Config
 
 async def main():
     # Initialize agent
@@ -153,257 +230,109 @@ async def main():
     for tool in tools:
         print(f"Tool: {tool['name']} - {tool.get('description', 'N/A')}")
     
-    # Get available resources
-    resources = await agent.get_available_resources()
-    for resource in resources:
-        print(f"Resource: {resource['uri']} - {resource.get('name', 'N/A')}")
-    
-    # Fetch a specific resource
-    content = await agent.fetch_resource("resource://example")
-    print(content)
-    
     # Clean up
     await agent.close()
 
 asyncio.run(main())
 ```
 
-### Streaming Responses
+## 📁 Project Structure
 
-```python
-async def stream_example():
-    config = Config()
-    agent = MCPAgent(config)
-    await agent.initialize()
-    
-    # Stream responses
-    async for chunk in agent.stream("Tell me about the available tools"):
-        print(chunk, end="", flush=True)
-    
-    await agent.close()
-
-asyncio.run(stream_example())
+```
+moba-agent/
+├── src/
+│   ├── moba_agent/              # Core agent implementation
+│   │   ├── __init__.py
+│   │   ├── agent.py            # MCPAgent class
+│   │   ├── config.py           # Configuration management
+│   │   ├── resources.py        # Resource handler
+│   │   ├── tools.py            # Tool handler
+│   │   └── main.py             # Interactive CLI
+│   └── moba_server/            # REST API server
+│       ├── __init__.py
+│       ├── main.py             # FastAPI application
+│       ├── chat_handler.py     # Chat completion handler (uses MCPAgent)
+│       ├── config.py           # Server configuration
+│       └── models.py           # Request/response models
+├── scripts/
+│   ├── run_agent.py           # Interactive chat
+│   ├── test_integration.py    # Integration tests
+│   └── ...                    # Other utility scripts
+├── tests/                      # Test suite
+├── mcp_servers.json           # MCP server configuration
+├── pyproject.toml             # Project configuration
+├── .env.example               # Environment template
+└── README.md                  # This file
 ```
 
-### Automatic Resource Context Injection
+## 🧪 Testing
 
-The agent automatically injects available MCP resources into the LLM's context on the first message of each conversation thread. This ensures the LLM is aware of all available resources from the start.
-
-```python
-async def resource_injection_example():
-    config = Config()
-    agent = MCPAgent(config)
-    await agent.initialize()
-    
-    # First message - resources are automatically injected
-    response1 = await agent.invoke(
-        "What resources do you have access to?",
-        thread_id="conversation_1"
-    )
-    print(response1)
-    
-    # Subsequent messages in same thread - no duplicate injection
-    response2 = await agent.invoke(
-        "Can you use those resources to help me?",
-        thread_id="conversation_1"
-    )
-    print(response2)
-    
-    # New thread - resources injected again for new context
-    response3 = await agent.invoke(
-        "Hello!",
-        thread_id="conversation_2"
-    )
-    print(response3)
-    
-    await agent.close()
-
-asyncio.run(resource_injection_example())
-```
-
-**Key Features:**
-- Resources are injected only once per thread
-- Each new thread gets fresh resource context
-- Works with both `invoke()` and `stream()` methods
-- Gracefully handles cases with no available resources
-
-## Example Scripts
-
-The `scripts/` directory contains several example scripts:
-
-- **run_agent.py** - Main interactive chat application
-- **list_tools.py** - List all available MCP tools
-- **list_resources.py** - List all available MCP resources
-- **fetch_resources.py** - Interactive resource fetcher
-- **test_connection.py** - Test MCP server connectivity
-- **demo_tool_execution.py** - Demonstrate tool execution
-- **demo_resource_injection.py** - Demonstrate automatic resource context injection
-
-### Testing Connection
-
-Before running the agent, test your MCP server connection:
-
-```bash
-python scripts/test_connection.py
-```
-
-### Listing Tools
-
-View all available tools from the MCP server:
-
-```bash
-python scripts/list_tools.py
-```
-
-### Listing Resources
-
-View all available resources:
-
-```bash
-python scripts/list_resources.py
-```
-
-## MCP Server Setup
-
-This agent requires an MCP server running with SSE/Streamable HTTP transport. Here's a simple example MCP server:
-
-```python
-# example_mcp_server.py
-from mcp.server.fastmcp import FastMCP
-
-mcp = FastMCP("Example Server")
-
-@mcp.tool()
-def add(a: int, b: int) -> int:
-    """Add two numbers"""
-    return a + b
-
-@mcp.tool()
-def multiply(a: int, b: int) -> int:
-    """Multiply two numbers"""
-    return a * b
-
-if __name__ == "__main__":
-    mcp.run(transport="streamable-http", port=8000)
-```
-
-Run the server:
-
-```bash
-python example_mcp_server.py
-```
-
-## Testing
-
-Run the test suite:
-
+### Run Tests
 ```bash
 pytest tests/
 ```
 
-Run with coverage:
-
+### Test Integration
 ```bash
-pytest tests/ --cov=src/moba_agent --cov-report=html
+python scripts/test_integration.py
 ```
 
-## Project Structure
-
-```
-langgraph-agent-mcp/
-├── src/
-│   └── moba_agent/
-│       ├── __init__.py         # Package initialization
-│       ├── agent.py            # Main MCPAgent class
-│       ├── config.py           # Configuration management
-│       ├── resources.py        # Resource handler
-│       ├── tools.py            # Tool handler
-│       └── main.py             # Interactive application
-├── scripts/
-│   ├── run_agent.py           # Main entry point
-│   ├── list_tools.py          # Tool listing script
-│   ├── list_resources.py      # Resource listing script
-│   ├── fetch_resources.py     # Resource fetcher
-│   ├── test_connection.py     # Connection tester
-│   └── demo_tool_execution.py # Tool execution demo
-├── tests/
-│   ├── test_config.py         # Configuration tests
-│   ├── test_agent.py          # Agent tests
-│   ├── test_resources.py      # Resource handler tests
-│   └── test_tools.py          # Tool handler tests
-├── pyproject.toml             # Project configuration
-├── .env.example               # Environment variables template
-├── .gitignore                 # Git ignore file
-└── README.md                  # This file
+### Test Coverage
+```bash
+pytest tests/ --cov=src --cov-report=html
 ```
 
-## Key Components
+## 🔄 Migration from Separate Services
 
-### MCPAgent
+This project consolidates what were previously separate services:
+- **Before**: Separate `moba_server` with duplicate MCP/LLM code
+- **After**: Single codebase with `moba_agent` as the core, `moba_server` as REST wrapper
 
-The main agent class that:
-- Initializes connection to MCP server
-- Sets up Gemini 2.5 Flash as the LLM
-- Creates LangGraph agent with discovered tools
-- Handles conversations with state management
+### Benefits of Integration:
+- ✅ **Zero code duplication** - Single implementation of MCP/LLM logic
+- ✅ **No network overhead** - Direct library imports instead of service calls
+- ✅ **Simplified debugging** - Single process, clear stack traces
+- ✅ **Easier deployment** - One application to deploy and manage
+- ✅ **100% API compatibility** - All endpoints preserve exact paths
 
-### MultiServerMCPClient
-
-Uses the official `langchain_mcp_adapters` library to:
-- Connect to MCP servers via SSE/Streamable HTTP
-- Discover and load tools dynamically
-- Handle reconnection and error recovery
-
-### ResourceHandler
-
-Manages MCP resources:
-- Lists available resources
-- Fetches resource content on demand
-- No caching - always fresh data
-
-### ToolHandler
-
-Manages MCP tools:
-- Discovers available tools
-- Formats tool descriptions
-- Executes tools with proper error handling
-
-## Troubleshooting
+## 🐛 Troubleshooting
 
 ### Connection Issues
 
-If you can't connect to the MCP server:
-
-1. Verify the server is running:
+1. Verify MCP servers are running:
 ```bash
-curl http://localhost:8000/mcp
+curl http://localhost:8000/sse
 ```
 
-2. Check the connection:
+2. Check server logs:
 ```bash
-python scripts/test_connection.py
+tail -f logs/fastapi_server.log
 ```
 
-3. Verify environment variables:
+3. Test with debug endpoint:
 ```bash
-echo $MCP_SERVER_URL
+curl http://localhost:8001/debug/agent
 ```
 
 ### Google API Key Issues
 
 1. Ensure your API key is valid
 2. Check that Gemini API is enabled in Google Cloud Console
-3. Verify the key has proper permissions
+3. Verify the key in `.env` file
 
-### Tool Execution Issues
+### Common Errors
 
-1. Check that tools are properly exposed by the MCP server
-2. Verify tool parameters match expected schema
-3. Check logs for detailed error messages
+- **"MCPAgent not initialized"**: Check your Google API key
+- **"Event loop is closed"**: Normal on shutdown, can be ignored
+- **CORS errors**: Ensure `ALLOW_CORS=true` in `.env`
 
-## Contributing
+## 📝 API Documentation
 
-Contributions are welcome! Please:
+Once the server is running, visit:
+- Swagger UI: `http://localhost:8001/docs`
+- ReDoc: `http://localhost:8001/redoc`
+
+## 🤝 Contributing
 
 1. Fork the repository
 2. Create a feature branch
@@ -411,18 +340,18 @@ Contributions are welcome! Please:
 4. Ensure all tests pass
 5. Submit a pull request
 
-## License
+## 📄 License
 
 MIT License - see LICENSE file for details
 
-## Acknowledgments
+## 🙏 Acknowledgments
 
 - Built with [LangGraph](https://github.com/langchain-ai/langgraph)
-- Uses [langchain-mcp-adapters](https://github.com/langchain-ai/langchain-mcp-adapters)
 - Powered by [Google Gemini](https://deepmind.google/technologies/gemini/)
 - Implements [Model Context Protocol](https://modelcontextprotocol.io/)
+- REST API by [FastAPI](https://fastapi.tiangolo.com/)
 
-## Support
+## 📞 Support
 
 For issues, questions, or suggestions:
 - Open an issue on GitHub

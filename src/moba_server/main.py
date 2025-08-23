@@ -20,9 +20,9 @@ from .models import (
 from .chat_handler import chat_handler
 
 # Ensure logs directory exists
-log_dir = "/root/projects/talk-2-tables-mcp/logs"
+log_dir = config.log_dir
 os.makedirs(log_dir, exist_ok=True)
-log_file_path = os.path.join(log_dir, "fastapi_server.log")
+log_file_path = os.path.join(log_dir, "moba_server.log")
 
 # Configure logging
 logging.basicConfig(
@@ -39,34 +39,21 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
     logger.info("Starting FastAPI server for Talk2Tables")
-    logger.info(f"Using LLM provider: {config.llm_provider}")
-    if config.llm_provider == "openrouter":
-        logger.info(f"OpenRouter model: {config.openrouter_model}")
-    elif config.llm_provider == "gemini":
-        logger.info(f"Gemini model: {config.gemini_model}")
-    logger.info("Using MCP Aggregator for multi-server support")
+    logger.info("Using MCPAgent with Gemini for LLM and MCP integration")
     
-    # Initialize chat handler with MCP aggregator
+    # Initialize chat handler with MCPAgent
     try:
         await chat_handler.initialize()
-        logger.info("✓ MCP Aggregator initialized successfully")
+        logger.info("✓ MCPAgent initialized successfully")
         
-        # List connected servers
-        if chat_handler.mcp_aggregator:
-            connected_servers = list(chat_handler.mcp_aggregator.sessions.keys())
-            logger.info(f"Connected to {len(connected_servers)} MCP server(s): {connected_servers}")
-            
-            # List available tools
-            tools = chat_handler.mcp_aggregator.list_tools()
-            logger.info(f"Available tools: {tools}")
+        # Get available tools and resources
+        if chat_handler.agent:
+            tools = await chat_handler.get_available_tools()
+            resources = await chat_handler.get_available_resources()
+            logger.info(f"Available tools: {len(tools)}")
+            logger.info(f"Available resources: {len(resources)}")
         
-        # Test LLM provider connection
-        llm_connected = await chat_handler.llm_client.test_connection()
-        provider_name = config.llm_provider.title()
-        if llm_connected:
-            logger.info(f"✓ {provider_name} connection successful")
-        else:
-            logger.warning(f"✗ {provider_name} connection failed")
+        logger.info("✓ MCPAgent connection successful")
             
     except Exception as e:
         logger.error(f"Error during startup: {str(e)}")
@@ -76,9 +63,9 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down FastAPI server")
     try:
-        if chat_handler.mcp_aggregator:
-            await chat_handler.mcp_aggregator.disconnect_all()
-            logger.info("MCP Aggregator disconnected")
+        if chat_handler.agent:
+            await chat_handler.agent.close()
+            logger.info("MCPAgent disconnected")
     except Exception as e:
         logger.error(f"Error during shutdown: {str(e)}")
 
@@ -125,9 +112,9 @@ async def health_check():
         # Ensure aggregator is initialized
         await chat_handler.ensure_initialized()
         
-        # Test MCP connection - check if aggregator has connected servers
+        # Test MCP connection - check if agent is initialized
         mcp_status = "disconnected"
-        if chat_handler.mcp_aggregator and len(chat_handler.mcp_aggregator.sessions) > 0:
+        if chat_handler.agent:
             mcp_status = "connected"
         
         return HealthResponse(
@@ -181,15 +168,8 @@ async def create_chat_completion(request: ChatCompletionRequest):
 @app.get("/models")
 async def list_models():
     """List available models (OpenAI-compatible endpoint)."""
-    if config.llm_provider == "openrouter":
-        model_id = config.openrouter_model
-        owned_by = "openrouter"
-    elif config.llm_provider == "gemini":
-        model_id = config.gemini_model
-        owned_by = "google"
-    else:
-        model_id = "unknown"
-        owned_by = "unknown"
+    model_id = "gemini-2.0-flash-exp"
+    owned_by = "google"
     
     return {
         "object": "list",
@@ -215,59 +195,62 @@ async def mcp_status():
         await chat_handler.ensure_initialized()
         
         # Check connection status
-        connected = chat_handler.mcp_aggregator and len(chat_handler.mcp_aggregator.sessions) > 0
+        connected = chat_handler.agent is not None
         
         if not connected:
             return {
                 "connected": False,
-                "error": "Cannot connect to MCP server"
+                "error": "MCPAgent not initialized"
             }
         
-        # Get server capabilities from aggregator
-        tools = chat_handler.mcp_aggregator.list_tools()
-        resource_uris = chat_handler.mcp_aggregator.list_resources()
-        servers = list(chat_handler.mcp_aggregator.sessions.keys())
+        # Get capabilities from MCPAgent
+        tools = await chat_handler.get_available_tools()
+        resources = await chat_handler.get_available_resources()
+        tool_names = [t.get('name', '') for t in tools]
+        resource_uris = [r.get('uri', '') for r in resources]
+        servers = list(set(r.get('server', 'default') for r in resources))
         
-        # Dynamically fetch all resources
+        # Fetch resource data
         all_resources_data = {}
         metadata = {}
         
         try:
             logger.debug("Fetching all resources for status endpoint...")
-            all_resources = await chat_handler.mcp_aggregator.read_all_resources()
             
-            # Process resources
-            for resource_uri, content in all_resources.items():
-                # Store all resources
-                all_resources_data[resource_uri] = content
-                
-                # Extract metadata specifically if found
-                if "metadata" in resource_uri.lower() and isinstance(content, dict):
-                    metadata = content
-                    logger.debug(f"Found metadata in resource: {resource_uri}")
+            # Fetch each resource
+            for resource in resources:
+                resource_uri = resource.get('uri', '')
+                try:
+                    content = await chat_handler.agent.fetch_resource(resource_uri)
+                    all_resources_data[resource_uri] = content
+                    
+                    # Extract metadata if found
+                    if "metadata" in resource_uri.lower() and isinstance(content, dict):
+                        metadata = content
+                        logger.debug(f"Found metadata in resource: {resource_uri}")
+                except Exception as e:
+                    logger.error(f"Could not fetch resource {resource_uri}: {e}")
             
-            logger.info(f"Status endpoint fetched {len(all_resources)} resources")
+            logger.info(f"Status endpoint fetched {len(all_resources_data)} resources")
             
         except Exception as e:
             logger.error(f"Could not fetch resources: {e}")
         
         # Build detailed resource information
         resources_info = []
-        for resource_uri in resource_uris:
-            resource_detail = chat_handler.mcp_aggregator.get_resource_info(resource_uri)
-            if resource_detail:
-                resources_info.append({
-                    "uri": resource_uri,
-                    "server": resource_detail.get('server', 'unknown'),
-                    "name": resource_detail.get('name', resource_uri),
-                    "description": resource_detail.get('description', ''),
-                    "has_data": resource_uri in all_resources_data
-                })
+        for resource in resources:
+            resources_info.append({
+                "uri": resource.get('uri', ''),
+                "server": resource.get('server', 'unknown'),
+                "name": resource.get('name', ''),
+                "description": resource.get('description', ''),
+                "has_data": resource.get('uri', '') in all_resources_data
+            })
         
         return {
             "connected": True,
             "servers": servers,
-            "tools": tools,
+            "tools": tool_names,
             "resources": resources_info,
             "resources_data": all_resources_data,
             "database_metadata": metadata
@@ -286,37 +269,37 @@ async def debug_agent():
     try:
         await chat_handler.ensure_initialized()
         
-        # Get agent status - check if attribute exists first
-        has_agent = hasattr(chat_handler, 'agent_executor') and chat_handler.agent_executor is not None
-        has_tools = hasattr(chat_handler, 'tools') and chat_handler.tools is not None and len(chat_handler.tools) > 0
+        # Get agent status
+        has_agent = chat_handler.agent is not None
         
         tools_info = []
-        if has_tools and hasattr(chat_handler, 'tools'):
-            for tool in chat_handler.tools:
-                tools_info.append({
-                    "name": tool.name,
-                    "description": tool.description[:200] + "..." if len(tool.description) > 200 else tool.description
-                })
-        
-        # Get MCP aggregator status
-        mcp_connected = chat_handler.mcp_aggregator and len(chat_handler.mcp_aggregator.sessions) > 0
-        mcp_servers = list(chat_handler.mcp_aggregator.sessions.keys()) if mcp_connected else []
-        
-        # Get MCP tools directly from aggregator
         mcp_tools = []
-        if mcp_connected:
-            mcp_tools = chat_handler.mcp_aggregator.list_tools()
+        mcp_servers = []
+        
+        if has_agent:
+            # Get tools from MCPAgent
+            tools = await chat_handler.get_available_tools()
+            for tool in tools:
+                tools_info.append({
+                    "name": tool.get('name', ''),
+                    "description": tool.get('description', '')[:200] + "..." if len(tool.get('description', '')) > 200 else tool.get('description', '')
+                })
+            mcp_tools = [t.get('name', '') for t in tools]
+            
+            # Get resources to determine servers
+            resources = await chat_handler.get_available_resources()
+            mcp_servers = list(set(r.get('server', 'default') for r in resources))
         
         return {
             "agent_initialized": has_agent,
-            "tools_available": has_tools,
-            "tools_count": len(chat_handler.tools) if has_tools and hasattr(chat_handler, 'tools') else 0,
+            "tools_available": len(tools_info) > 0,
+            "tools_count": len(tools_info),
             "tools": tools_info,
-            "mcp_connected": mcp_connected,
+            "mcp_connected": has_agent,
             "mcp_servers": mcp_servers,
             "mcp_tools": mcp_tools,
-            "llm_provider": chat_handler.llm_client.provider if chat_handler.llm_client else None,
-            "llm_available": chat_handler.llm_client and chat_handler.llm_client.llm is not None
+            "llm_provider": "gemini",
+            "llm_available": has_agent
         }
         
     except Exception as e:
@@ -362,7 +345,7 @@ if __name__ == "__main__":
     
     logger.info(f"Starting server on {config.fastapi_host}:{config.fastapi_port}")
     uvicorn.run(
-        "fastapi_server.main:app",
+        "moba_server.main:app",
         host=config.fastapi_host,
         port=config.fastapi_port,
         reload=False,
