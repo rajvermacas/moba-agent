@@ -1,0 +1,333 @@
+{
+  "server_name": "talk-2-tables-mcp",
+  "database_path": "test_data/sample.db",
+  "description": "Sample SQLite database for demonstrating MCP database query capabilities. Contains realistic business data for testing and development purposes.",
+  "business_use_cases": [
+    "Customer relationship management and analysis",
+    "Sales performance tracking and reporting",
+    "Product inventory management",
+    "Order fulfillment and logistics tracking",
+    "Business intelligence and analytics",
+    "Data exploration and discovery",
+    "Reporting and dashboard creation"
+  ],
+  "tables": {
+    "customers": {
+      "description": "Customer information and contact details",
+      "columns": [
+        {
+          "name": "customer_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": true,
+          "description": "Unique customer identifier"
+        },
+        {
+          "name": "first_name",
+          "type": "TEXT",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Customer first name"
+        },
+        {
+          "name": "last_name",
+          "type": "TEXT",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Customer last name"
+        },
+        {
+          "name": "email",
+          "type": "TEXT",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Customer email address"
+        },
+        {
+          "name": "phone",
+          "type": "TEXT",
+          "not_null": false,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Customer phone number"
+        },
+        {
+          "name": "address",
+          "type": "TEXT",
+          "not_null": false,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Customer address"
+        },
+        {
+          "name": "city",
+          "type": "TEXT",
+          "not_null": false,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Customer city"
+        },
+        {
+          "name": "country",
+          "type": "TEXT",
+          "not_null": false,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Customer country"
+        },
+        {
+          "name": "created_at",
+          "type": "DATETIME",
+          "not_null": true,
+          "default_value": "CURRENT_TIMESTAMP",
+          "primary_key": false,
+          "description": "Account creation timestamp"
+        }
+      ],
+      "sample_queries": [
+        "SELECT * FROM customers LIMIT 10",
+        "SELECT country, COUNT(*) as customer_count FROM customers GROUP BY country ORDER BY customer_count DESC",
+        "SELECT * FROM customers WHERE email LIKE '%@gmail.com' LIMIT 5"
+      ]
+    },
+    "products": {
+      "description": "Product catalog with pricing and inventory information",
+      "columns": [
+        {
+          "name": "product_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": true,
+          "description": "Unique product identifier"
+        },
+        {
+          "name": "name",
+          "type": "TEXT",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Product name"
+        },
+        {
+          "name": "description",
+          "type": "TEXT",
+          "not_null": false,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Product description"
+        },
+        {
+          "name": "category",
+          "type": "TEXT",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Product category"
+        },
+        {
+          "name": "price",
+          "type": "DECIMAL",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Product price"
+        },
+        {
+          "name": "stock_quantity",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": "0",
+          "primary_key": false,
+          "description": "Current stock quantity"
+        },
+        {
+          "name": "supplier",
+          "type": "TEXT",
+          "not_null": false,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Product supplier"
+        },
+        {
+          "name": "created_at",
+          "type": "DATETIME",
+          "not_null": true,
+          "default_value": "CURRENT_TIMESTAMP",
+          "primary_key": false,
+          "description": "Product creation timestamp"
+        }
+      ],
+      "sample_queries": [
+        "SELECT * FROM products WHERE stock_quantity < 10",
+        "SELECT category, AVG(price) as avg_price FROM products GROUP BY category",
+        "SELECT * FROM products WHERE price > 100 ORDER BY price DESC LIMIT 10"
+      ]
+    },
+    "orders": {
+      "description": "Customer orders and order details",
+      "columns": [
+        {
+          "name": "order_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": true,
+          "description": "Unique order identifier"
+        },
+        {
+          "name": "customer_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Customer who placed the order"
+        },
+        {
+          "name": "order_date",
+          "type": "DATE",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Date the order was placed"
+        },
+        {
+          "name": "total_amount",
+          "type": "DECIMAL",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Total order amount"
+        },
+        {
+          "name": "status",
+          "type": "TEXT",
+          "not_null": true,
+          "default_value": "'pending'",
+          "primary_key": false,
+          "description": "Order status (pending, shipped, delivered, cancelled)"
+        },
+        {
+          "name": "shipping_address",
+          "type": "TEXT",
+          "not_null": false,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Shipping address for the order"
+        }
+      ],
+      "sample_queries": [
+        "SELECT * FROM orders WHERE status = 'pending' ORDER BY order_date",
+        "SELECT customer_id, COUNT(*) as order_count, SUM(total_amount) as total_spent FROM orders GROUP BY customer_id ORDER BY total_spent DESC LIMIT 10",
+        "SELECT status, COUNT(*) as count FROM orders GROUP BY status"
+      ]
+    },
+    "order_items": {
+      "description": "Individual items within orders",
+      "columns": [
+        {
+          "name": "order_item_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": true,
+          "description": "Unique order item identifier"
+        },
+        {
+          "name": "order_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Reference to the order"
+        },
+        {
+          "name": "product_id",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Reference to the product"
+        },
+        {
+          "name": "quantity",
+          "type": "INTEGER",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Quantity of the product ordered"
+        },
+        {
+          "name": "unit_price",
+          "type": "DECIMAL",
+          "not_null": true,
+          "default_value": null,
+          "primary_key": false,
+          "description": "Price per unit at time of order"
+        }
+      ],
+      "sample_queries": [
+        "SELECT oi.*, p.name as product_name FROM order_items oi JOIN products p ON oi.product_id = p.product_id LIMIT 10",
+        "SELECT product_id, SUM(quantity) as total_sold FROM order_items GROUP BY product_id ORDER BY total_sold DESC LIMIT 10",
+        "SELECT o.order_date, SUM(oi.quantity * oi.unit_price) as daily_revenue FROM orders o JOIN order_items oi ON o.order_id = oi.order_id GROUP BY o.order_date ORDER BY o.order_date"
+      ]
+    }
+  },
+  "relationships": [
+    {
+      "from_table": "orders",
+      "from_column": "customer_id",
+      "to_table": "customers",
+      "to_column": "customer_id",
+      "relationship_type": "many_to_one"
+    },
+    {
+      "from_table": "order_items",
+      "from_column": "order_id",
+      "to_table": "orders",
+      "to_column": "order_id",
+      "relationship_type": "many_to_one"
+    },
+    {
+      "from_table": "order_items",
+      "from_column": "product_id",
+      "to_table": "products",
+      "to_column": "product_id",
+      "relationship_type": "many_to_one"
+    }
+  ],
+  "example_analytical_queries": [
+    {
+      "name": "Top Customers by Revenue",
+      "description": "Find the top 10 customers by total purchase amount",
+      "query": "SELECT c.first_name, c.last_name, c.email, SUM(o.total_amount) as total_spent FROM customers c JOIN orders o ON c.customer_id = o.customer_id GROUP BY c.customer_id ORDER BY total_spent DESC LIMIT 10"
+    },
+    {
+      "name": "Monthly Sales Trend",
+      "description": "Show sales trends by month",
+      "query": "SELECT strftime('%Y-%m', order_date) as month, COUNT(*) as order_count, SUM(total_amount) as revenue FROM orders GROUP BY month ORDER BY month"
+    },
+    {
+      "name": "Product Performance",
+      "description": "Analyze product sales performance",
+      "query": "SELECT p.name, p.category, SUM(oi.quantity) as total_sold, SUM(oi.quantity * oi.unit_price) as revenue FROM products p JOIN order_items oi ON p.product_id = oi.product_id GROUP BY p.product_id ORDER BY revenue DESC"
+    },
+    {
+      "name": "Customer Geographic Distribution",
+      "description": "Show customer distribution by country",
+      "query": "SELECT country, COUNT(*) as customer_count FROM customers WHERE country IS NOT NULL GROUP BY country ORDER BY customer_count DESC"
+    }
+  ],
+  "data_quality_notes": [
+    "All customer records have valid email addresses",
+    "Some optional fields like phone and address may be null",
+    "Order statuses are constrained to: pending, shipped, delivered, cancelled",
+    "All monetary values are stored as DECIMAL for precision",
+    "Timestamps use ISO format with timezone information"
+  ],
+  "last_updated": "2024-01-15T10:30:00Z"
+}
