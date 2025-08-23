@@ -5,8 +5,8 @@ Tests for Tool Handler
 import pytest
 import json
 from unittest.mock import Mock, AsyncMock, MagicMock
-from src.langgraph_agent_mcp.tools import ToolHandler
-from src.langgraph_agent_mcp.config import Config
+from src.moba_agent.tools import ToolHandler
+from src.moba_agent.config import Config
 
 
 class TestToolHandler:

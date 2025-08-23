@@ -5,8 +5,8 @@ Tests for Resource Handler
 import asyncio
 import pytest
 from unittest.mock import Mock, AsyncMock, MagicMock, patch
-from src.langgraph_agent_mcp.resources import ResourceHandler
-from src.langgraph_agent_mcp.config import Config
+from src.moba_agent.resources import ResourceHandler
+from src.moba_agent.config import Config
 
 
 class TestResourceHandler:

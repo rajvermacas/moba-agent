@@ -11,7 +11,7 @@ import httpx
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.langgraph_agent_mcp.config import Config
+from src.moba_agent.config import Config
 
 
 async def test_sse_connection():

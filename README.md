@@ -136,7 +136,7 @@ In interactive mode, you can use these commands:
 
 ```python
 import asyncio
-from src.langgraph_agent_mcp import MCPAgent, Config
+from src.moba_agent import MCPAgent, Config
 
 async def main():
     # Initialize agent
@@ -304,7 +304,7 @@ pytest tests/
 Run with coverage:
 
 ```bash
-pytest tests/ --cov=src/langgraph_agent_mcp --cov-report=html
+pytest tests/ --cov=src/moba_agent --cov-report=html
 ```
 
 ## Project Structure
@@ -312,7 +312,7 @@ pytest tests/ --cov=src/langgraph_agent_mcp --cov-report=html
 ```
 langgraph-agent-mcp/
 ├── src/
-│   └── langgraph_agent_mcp/
+│   └── moba_agent/
 │       ├── __init__.py         # Package initialization
 │       ├── agent.py            # Main MCPAgent class
 │       ├── config.py           # Configuration management

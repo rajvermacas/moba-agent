@@ -11,7 +11,7 @@ from pathlib import Path
 # Add the src directory to the path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from langgraph_agent_mcp.config import Config
+from moba_agent.config import Config
 
 def test_json_loading():
     """Test loading MCP servers from JSON file"""

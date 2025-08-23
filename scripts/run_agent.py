@@ -10,7 +10,7 @@ import os
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.langgraph_agent_mcp.main import MCPAgentApp
+from src.moba_agent.main import MCPAgentApp
 
 
 async def main():

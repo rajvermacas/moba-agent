@@ -16,8 +16,8 @@ from pathlib import Path
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.langgraph_agent_mcp.agent import MCPAgent
-from src.langgraph_agent_mcp.config import Config
+from src.moba_agent.agent import MCPAgent
+from src.moba_agent.config import Config
 
 
 async def demo_resource_injection():

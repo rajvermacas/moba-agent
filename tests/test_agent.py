@@ -4,8 +4,8 @@ Tests for MCP Agent
 
 import pytest
 from unittest.mock import Mock, AsyncMock, patch, MagicMock
-from src.langgraph_agent_mcp.agent import MCPAgent
-from src.langgraph_agent_mcp.config import Config
+from src.moba_agent.agent import MCPAgent
+from src.moba_agent.config import Config
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
 
 
@@ -51,9 +51,9 @@ class TestMCPAgent:
     @pytest.mark.asyncio
     async def test_agent_initialize(self, mock_config, mock_mcp_client, mock_llm):
         """Test agent initialization process"""
-        with patch('src.langgraph_agent_mcp.agent.MultiServerMCPClient', return_value=mock_mcp_client):
-            with patch('src.langgraph_agent_mcp.agent.ChatGoogleGenerativeAI', return_value=mock_llm):
-                with patch('src.langgraph_agent_mcp.agent.create_react_agent') as mock_create_agent:
+        with patch('src.moba_agent.agent.MultiServerMCPClient', return_value=mock_mcp_client):
+            with patch('src.moba_agent.agent.ChatGoogleGenerativeAI', return_value=mock_llm):
+                with patch('src.moba_agent.agent.create_react_agent') as mock_create_agent:
                     mock_create_agent.return_value = Mock()
                     
                     agent = MCPAgent(mock_config)
@@ -95,9 +95,9 @@ class TestMCPAgent:
     @pytest.mark.asyncio
     async def test_agent_invoke_not_initialized(self, mock_config, mock_mcp_client, mock_llm):
         """Test agent invoke initializes if not initialized"""
-        with patch('src.langgraph_agent_mcp.agent.MultiServerMCPClient', return_value=mock_mcp_client):
-            with patch('src.langgraph_agent_mcp.agent.ChatGoogleGenerativeAI', return_value=mock_llm):
-                with patch('src.langgraph_agent_mcp.agent.create_react_agent') as mock_create_agent:
+        with patch('src.moba_agent.agent.MultiServerMCPClient', return_value=mock_mcp_client):
+            with patch('src.moba_agent.agent.ChatGoogleGenerativeAI', return_value=mock_llm):
+                with patch('src.moba_agent.agent.create_react_agent') as mock_create_agent:
                     mock_graph = Mock()
                     mock_graph.ainvoke = AsyncMock(return_value={
                         "messages": [AIMessage(content="Test response")]

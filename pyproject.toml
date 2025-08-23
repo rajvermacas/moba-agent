@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "LangGraph agent with MCP integration using Gemini 2.5 Flash"
 authors = ["Your Name <you@example.com>"]
 readme = "README.md"
-packages = [{include = "langgraph_agent_mcp", from = "src"}]
+packages = [{include = "moba_agent", from = "src"}]
 
 [tool.poetry.dependencies]
 python = "^3.9"

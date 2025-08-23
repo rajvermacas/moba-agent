@@ -5,7 +5,7 @@ Tests for configuration module
 import os
 import pytest
 from unittest.mock import patch, MagicMock
-from src.langgraph_agent_mcp.config import Config
+from src.moba_agent.config import Config
 
 
 class TestConfig:

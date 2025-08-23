@@ -7,7 +7,7 @@ import json
 import os
 from pathlib import Path
 from unittest.mock import Mock, patch, mock_open
-from src.langgraph_agent_mcp.config import Config
+from src.moba_agent.config import Config
 
 
 class TestMultiMCPConfig:
