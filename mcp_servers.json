@@ -16,7 +16,7 @@
       "transport": "stdio",
       "command": "npx",
       "args": ["-y", "@modelcontextprotocol/server-filesystem"],
-      "enabled": true
+      "enabled": false
     },
     {
       "name": "github_server",
@@ -28,9 +28,5 @@
       },
       "enabled": false
     }
-  ],
-  "default_settings": {
-    "timeout_ms": 30000,
-    "log_level": "INFO"
-  }
+  ]
 }

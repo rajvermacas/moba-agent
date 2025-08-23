@@ -103,13 +103,5 @@
       "description": "MCP server deployed in Kubernetes with TLS"
     }
   ],
-  "default_settings": {
-    "timeout_ms": 30000,
-    "log_level": "INFO",
-    "retry_policy": {
-      "max_retries": 3,
-      "backoff_multiplier": 2
-    }
-  },
   "_comment": "This is an example configuration file showing various MCP server types. Enable servers by setting 'enabled': true and ensure required environment variables are set."
 }
