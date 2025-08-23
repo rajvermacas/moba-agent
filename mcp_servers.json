@@ -27,6 +27,14 @@
         "GITHUB_TOKEN": "${GITHUB_TOKEN}"
       },
       "enabled": false
+    },
+    {
+      "name": "fetch",
+      "transport": "stdio",
+      "command": "uvx" ,
+      "args": ["mcp-server-fetch"],
+      "enabled": true
     }
+    
   ]
 }

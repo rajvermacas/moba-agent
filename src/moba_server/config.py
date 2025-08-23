@@ -32,6 +32,10 @@ class FastAPIServerConfig(BaseSettings):
     )
     
     # OpenAI-compatible settings
+    agent_model: str = Field(
+        default="gemini-2.5-flash",
+        description="Default model name for responses"
+    )
     max_tokens: int = Field(
         default=2000,
         description="Maximum tokens for LLM responses"

@@ -23,6 +23,7 @@ class ChatCompletionHandler:
     def __init__(self):
         """Initialize the chat completion handler with MCPAgent."""
         self.agent = None
+        self.config = None
         self._init_task = None
         logger.info("Initialized chat completion handler with MCPAgent")
     
@@ -32,10 +33,10 @@ class ChatCompletionHandler:
             logger.info("Initializing MCPAgent")
             try:
                 # Create config from environment
-                config = Config()
+                self.config = Config()
                 
                 # Create and initialize MCPAgent
-                self.agent = MCPAgent(config)
+                self.agent = MCPAgent(self.config)
                 await self.agent.initialize()
                 
                 logger.info("MCPAgent initialized successfully")
@@ -91,10 +92,25 @@ class ChatCompletionHandler:
             )
             
             # Create response in OpenAI format
+            # Get model with fallback
+            model_name = request.model
+            logger.debug(f"Request model: {request.model}")
+            logger.debug(f"Config available: {self.config is not None}")
+            if self.config:
+                logger.debug(f"Config agent_model: {self.config.agent_model}")
+            
+            if not model_name and self.config:
+                model_name = self.config.agent_model
+            if not model_name:
+                # This shouldn't happen if config is properly initialized
+                logger.warning("No model specified and config not available, using default")
+                model_name = "gemini-2.5-flash"  # Emergency fallback
+            
+            logger.info(f"Using model: {model_name}")
             response = ChatCompletionResponse(
                 id=f"chatcmpl-{uuid4()}",
                 created=int(time.time()),
-                model=request.model,  # Default model from MCPAgent
+                model=model_name,
                 choices=[Choice(
                     index=0,
                     message=ChatMessage(
@@ -114,10 +130,17 @@ class ChatCompletionHandler:
             # Return error response in OpenAI format
             error_message = f"I encountered an error processing your request: {str(e)}"
             
+            # Get model with fallback
+            model_name = request.model
+            if not model_name and self.config:
+                model_name = self.config.agent_model
+            if not model_name:
+                model_name = "gemini-2.5-flash"  # Final fallback
+            
             error_response = ChatCompletionResponse(
                 id=f"chatcmpl-error-{uuid4()}",
                 created=int(time.time()),
-                model=request.model or "gemini-2.5-flash",
+                model=model_name,
                 choices=[Choice(
                     index=0,
                     message=ChatMessage(
