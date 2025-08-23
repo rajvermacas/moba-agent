@@ -53,9 +53,13 @@ class TestResourceHandler:
         mock_response.resources = [mock_resource1, mock_resource2]
         
         mock_session.list_resources = AsyncMock(return_value=mock_response)
-        mock_mcp_client.session = AsyncMock(return_value=mock_session)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        # Create async context manager
+        async_context = AsyncMock()
+        async_context.__aenter__ = AsyncMock(return_value=mock_session)
+        async_context.__aexit__ = AsyncMock(return_value=None)
+        
+        mock_mcp_client.session = Mock(return_value=async_context)
         
         resource_handler.set_client(mock_mcp_client)
         
@@ -77,9 +81,13 @@ class TestResourceHandler:
     async def test_list_resources_error(self, resource_handler, mock_mcp_client, mock_session):
         """Test listing resources with error"""
         mock_session.list_resources = AsyncMock(side_effect=Exception("Test error"))
-        mock_mcp_client.session = AsyncMock(return_value=mock_session)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        # Create async context manager
+        async_context = AsyncMock()
+        async_context.__aenter__ = AsyncMock(return_value=mock_session)
+        async_context.__aexit__ = AsyncMock(return_value=None)
+        
+        mock_mcp_client.session = Mock(return_value=async_context)
         
         resource_handler.set_client(mock_mcp_client)
         
@@ -97,9 +105,13 @@ class TestResourceHandler:
         mock_response.contents = [mock_content]
         
         mock_session.read_resource = AsyncMock(return_value=mock_response)
-        mock_mcp_client.session = AsyncMock(return_value=mock_session)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        # Create async context manager
+        async_context = AsyncMock()
+        async_context.__aenter__ = AsyncMock(return_value=mock_session)
+        async_context.__aexit__ = AsyncMock(return_value=None)
+        
+        mock_mcp_client.session = Mock(return_value=async_context)
         
         resource_handler.set_client(mock_mcp_client)
         
@@ -120,9 +132,13 @@ class TestResourceHandler:
     async def test_fetch_resource_error(self, resource_handler, mock_mcp_client, mock_session):
         """Test fetching resource with error"""
         mock_session.read_resource = AsyncMock(side_effect=Exception("Test error"))
-        mock_mcp_client.session = AsyncMock(return_value=mock_session)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        # Create async context manager
+        async_context = AsyncMock()
+        async_context.__aenter__ = AsyncMock(return_value=mock_session)
+        async_context.__aexit__ = AsyncMock(return_value=None)
+        
+        mock_mcp_client.session = Mock(return_value=async_context)
         
         resource_handler.set_client(mock_mcp_client)
         
@@ -195,9 +211,13 @@ class TestResourceHandler:
         mock_response.resources = [mock_resource1, mock_resource2]
         
         mock_session.list_resources = AsyncMock(return_value=mock_response)
-        mock_mcp_client.session = AsyncMock(return_value=mock_session)
-        mock_session.__aenter__ = AsyncMock(return_value=mock_session)
-        mock_session.__aexit__ = AsyncMock(return_value=None)
+        
+        # Create async context manager
+        async_context = AsyncMock()
+        async_context.__aenter__ = AsyncMock(return_value=mock_session)
+        async_context.__aexit__ = AsyncMock(return_value=None)
+        
+        mock_mcp_client.session = Mock(return_value=async_context)
         
         resource_handler.set_client(mock_mcp_client)
         
@@ -255,7 +275,8 @@ class TestResourceHandler:
         resource_handler.set_client(mock_mcp_client)
         
         # Test
-        resources = await resource_handler.get_all_resources(max_content_size=100)
+        # Test with no truncation for POC
+        resources = await resource_handler.get_all_resources(max_content_size=None)
         
         assert len(resources) == 2
         
@@ -352,8 +373,46 @@ class TestResourceHandler:
         assert resources == []
     
     @pytest.mark.asyncio
-    async def test_get_all_resources_truncation(self, resource_handler, mock_mcp_client, mock_session):
-        """Test content truncation in get_all_resources"""
+    async def test_get_all_resources_no_truncation(self, resource_handler, mock_mcp_client, mock_session):
+        """Test that content is NOT truncated when max_content_size is None"""
+        # Setup mock resource with large content
+        mock_resource = Mock()
+        mock_resource.uri = "resource://large"
+        mock_resource.name = "Large Resource"
+        
+        mock_resources_response = Mock()
+        mock_resources_response.resources = [mock_resource]
+        
+        # Create large content
+        large_text = "x" * 10000  # 10000 chars
+        mock_content = Mock()
+        mock_content.text = large_text
+        mock_response = Mock()
+        mock_response.contents = mock_content
+        
+        mock_session.list_resources = AsyncMock(return_value=mock_resources_response)
+        mock_session.read_resource = AsyncMock(return_value=mock_response)
+        
+        # Create async context manager
+        async_context = AsyncMock()
+        async_context.__aenter__ = AsyncMock(return_value=mock_session)
+        async_context.__aexit__ = AsyncMock(return_value=None)
+        
+        mock_mcp_client.session = Mock(return_value=async_context)
+        
+        resource_handler.set_client(mock_mcp_client)
+        
+        # Test with None max_content_size (unlimited)
+        resources = await resource_handler.get_all_resources(max_content_size=None)
+        
+        assert len(resources) == 1
+        assert resources[0]['content'] == large_text  # Should NOT be truncated
+        assert "truncated" not in resources[0]['content']
+        assert resources[0]['fetch_status'] == "success"
+    
+    @pytest.mark.asyncio
+    async def test_get_all_resources_with_truncation(self, resource_handler, mock_mcp_client, mock_session):
+        """Test that content IS truncated when max_content_size is specified"""
         # Setup mock resource with large content
         mock_resource = Mock()
         mock_resource.uri = "resource://large"

@@ -34,9 +34,9 @@ async def demo_tool_execution():
         
         print(f"Found {len(tools)} tools available\n")
         
-        # Show first few tools
+        # Show ALL tools - no truncation for POC
         print("Available tools:")
-        for i, tool in enumerate(tools[:5], 1):
+        for i, tool in enumerate(tools, 1):
             print(f"  {i}. {tool['name']}")
         
         print("\n" + "-"*60)

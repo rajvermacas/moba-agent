@@ -46,7 +46,8 @@ async def demo_resource_injection():
         
         # Check available resources and their content
         print("Fetching all resources with content...")
-        resources_with_content = await agent.resource_handler.get_all_resources(max_content_size=500)
+        # Get ALL content - no truncation for POC
+        resources_with_content = await agent.resource_handler.get_all_resources(max_content_size=None)
         
         if resources_with_content:
             print(f"Found {len(resources_with_content)} available MCP resources:")
@@ -61,8 +62,8 @@ async def demo_resource_injection():
                 print(f"    Status: {resource.get('fetch_status', 'unknown')}")
                 
                 if resource.get('fetch_status') == 'success' and resource.get('content'):
-                    content_preview = resource['content'][:100] if len(resource['content']) > 100 else resource['content']
-                    print(f"    Content Preview: {content_preview}...")
+                    # Show full content for POC - no truncation
+                    print(f"    Content: {resource['content']}")
                 elif resource.get('fetch_status') == 'failed':
                     print(f"    Error: {resource.get('fetch_error', 'Unknown error')}")
                 print()
@@ -82,7 +83,8 @@ async def demo_resource_injection():
             "Hello! Can you tell me what resources you have access to?",
             thread_id="demo_thread_1"
         )
-        print(f"Response: {response1[:200]}...")
+        # Show full response for POC
+        print(f"Response: {response1}")
         print()
         
         # Demonstrate second message in same thread (no injection)
@@ -94,7 +96,8 @@ async def demo_resource_injection():
             "Thanks! What can you help me with?",
             thread_id="demo_thread_1"
         )
-        print(f"Response: {response2[:200]}...")
+        # Show full response for POC
+        print(f"Response: {response2}")
         print()
         
         # Demonstrate new thread (resources injected again)
@@ -106,7 +109,8 @@ async def demo_resource_injection():
             "Hi there! I'm starting a new conversation.",
             thread_id="demo_thread_2"
         )
-        print(f"Response: {response3[:200]}...")
+        # Show full response for POC
+        print(f"Response: {response3}")
         print()
         
         # Show thread tracking

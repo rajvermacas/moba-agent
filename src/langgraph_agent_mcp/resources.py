@@ -216,7 +216,7 @@ class ResourceHandler:
         self.logger.warning(f"Resource not found: {name}")
         return None
     
-    async def get_all_resources(self, max_content_size: int = 50000) -> List[Dict[str, Any]]:
+    async def get_all_resources(self, max_content_size: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Get all resources with their actual content fetched
         
@@ -226,7 +226,7 @@ class ResourceHandler:
         3. Returns resources with both metadata and content
         
         Args:
-            max_content_size: Maximum size of content to include per resource
+            max_content_size: Maximum size of content to include per resource (None for unlimited)
             
         Returns:
             List of resources with metadata AND content
@@ -265,28 +265,33 @@ class ResourceHandler:
                 if content:
                     if isinstance(content, str):
                         content_str = content
-                        if len(content_str) > max_content_size:
+                        # Only truncate if max_content_size is specified (not None)
+                        if max_content_size is not None and len(content_str) > max_content_size:
                             content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
                     elif isinstance(content, dict):
                         # Check if it's processed content with text/data fields
                         if 'text' in content:
                             content_str = content['text']
-                            if isinstance(content_str, str) and len(content_str) > max_content_size:
+                            if max_content_size is not None and isinstance(content_str, str) and len(content_str) > max_content_size:
                                 content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
                         elif 'data' in content:
                             try:
                                 content_str = json.dumps(content['data'], indent=2)
-                                if len(content_str) > max_content_size:
+                                if max_content_size is not None and len(content_str) > max_content_size:
                                     content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
                             except:
-                                content_str = str(content['data'])[:max_content_size]
+                                content_str = str(content['data'])
+                                if max_content_size is not None:
+                                    content_str = content_str[:max_content_size]
                         else:
                             try:
                                 content_str = json.dumps(content, indent=2)
-                                if len(content_str) > max_content_size:
+                                if max_content_size is not None and len(content_str) > max_content_size:
                                     content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
                             except:
-                                content_str = str(content)[:max_content_size]
+                                content_str = str(content)
+                                if max_content_size is not None:
+                                    content_str = content_str[:max_content_size]
                     elif isinstance(content, list):
                         # Handle list of content items
                         if content and isinstance(content[0], dict):
@@ -304,11 +309,11 @@ class ResourceHandler:
                             except:
                                 content_str = str(content)
                         
-                        if content_str and len(content_str) > max_content_size:
+                        if max_content_size is not None and content_str and len(content_str) > max_content_size:
                             content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
                     else:
                         content_str = str(content)
-                        if len(content_str) > max_content_size:
+                        if max_content_size is not None and len(content_str) > max_content_size:
                             content_str = content_str[:max_content_size] + f"\n... (truncated at {max_content_size} chars)"
                 
                 self.logger.debug(f"Successfully fetched content for: {resource_uri}")

@@ -69,10 +69,9 @@ class MCPAgentApp:
             resources = await self.agent.get_available_resources()
             print(f"\n📚 Available Resources ({len(resources)}):")
             if resources:
-                for resource in resources[:5]:  # Show first 5
+                # Show ALL resources - no truncation for POC
+                for resource in resources:
                     print(f"  • {resource['uri']}: {resource.get('name', 'Unnamed')}")
-                if len(resources) > 5:
-                    print(f"  ... and {len(resources) - 5} more")
             else:
                 print("  No resources available")
             

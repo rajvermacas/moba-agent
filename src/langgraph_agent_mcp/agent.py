@@ -169,7 +169,8 @@ class MCPAgent:
         """
         try:
             # Use get_all_resources to fetch both metadata and content
-            resources = await self.resource_handler.get_all_resources(max_content_size=10000)
+            # Set to None for unlimited content size at POC level
+            resources = await self.resource_handler.get_all_resources(max_content_size=None)
             
             if not resources:
                 self.logger.debug("No MCP resources available to inject")
@@ -198,10 +199,9 @@ class MCPAgent:
                     context_lines.append(f"  Content:")
                     # Indent the content for better readability
                     content_lines = content.split('\n')
-                    for line in content_lines[:50]:  # Limit lines shown per resource
+                    # Show ALL lines - no truncation for POC
+                    for line in content_lines:
                         context_lines.append(f"    {line}")
-                    if len(content_lines) > 50:
-                        context_lines.append(f"    ... ({len(content_lines) - 50} more lines)")
                 elif fetch_status == 'failed':
                     error = resource.get('fetch_error', 'Unknown error')
                     context_lines.append(f"  Status: Failed to fetch - {error}")
