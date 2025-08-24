@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
-    logger.info("Starting FastAPI server for Talk2Tables")
+    logger.info("Starting FastAPI server for MHerb")
     logger.info("Using MCPAgent with Gemini for LLM and MCP integration")
     
     # Initialize chat handler with MCPAgent
@@ -72,7 +72,7 @@ async def lifespan(app: FastAPI):
 
 # Create FastAPI app
 app = FastAPI(
-    title="Talk2Tables FastAPI Server",
+    title="MHerb FastAPI Server",
     description="Chat completions API with database query capabilities via MCP",
     version="0.1.0",
     lifespan=lifespan
@@ -326,7 +326,7 @@ async def test_integration():
 async def root():
     """Root endpoint with API information."""
     return {
-        "name": "Talk2Tables FastAPI Server",
+        "name": "MHerb FastAPI Server",
         "version": "0.1.0",
         "description": "Chat completions API with database query capabilities",
         "endpoints": {
