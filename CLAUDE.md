@@ -1,4 +1,4 @@
-- Use serena and context7 mcp tool extensively.
+- Use context7 mcp tool extensively.
 - Use sub agents extensively whenever possible to get the task done in a separate context.
 - moba_agent has LLM and MCP integrations
 - moba_server has rest server api endpoints
