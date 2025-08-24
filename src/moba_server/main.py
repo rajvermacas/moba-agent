@@ -8,9 +8,10 @@ import os
 from contextlib import asynccontextmanager
 from typing import Dict, Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, Header
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from typing import Optional
 
 from .config import config
 from .models import (
@@ -132,12 +133,19 @@ async def health_check():
 
 
 @app.post("/chat/completions", response_model=ChatCompletionResponse)
-async def create_chat_completion(request: ChatCompletionRequest):
+async def create_chat_completion(
+    request: ChatCompletionRequest,
+    x_thread_id: Optional[str] = Header(None, alias="X-Thread-Id")
+):
     """
     Create a chat completion with database query capabilities.
     
     This endpoint provides OpenAI-compatible chat completions enhanced with
     database query capabilities through MCP server integration.
+    
+    Optional header:
+        X-Thread-Id: Specify a thread ID for session management.
+                    If not provided, a new session will be created.
     """
     try:
         logger.info(f"Received chat completion request with {len(request.messages)} messages")
@@ -149,10 +157,12 @@ async def create_chat_completion(request: ChatCompletionRequest):
                 detail="Messages array cannot be empty"
             )
         
-        # Process the chat completion
-        response = await chat_handler.process_chat_completion(request)
+        # Process the chat completion with optional thread_id
+        response = await chat_handler.process_chat_completion(request, thread_id=x_thread_id)
         
-        logger.info(f"Successfully processed chat completion request, response={response}")
+        # Get the thread_id from the response (for new sessions)
+        # We'll add it to response headers
+        logger.info(f"Successfully processed chat completion request")
         return response
         
     except HTTPException:
@@ -322,6 +332,105 @@ async def test_integration():
         )
 
 
+@app.post("/sessions/new")
+async def create_new_session():
+    """
+    Create a new chat session.
+    
+    Returns:
+        JSON with new thread_id that can be used in subsequent chat requests.
+    """
+    try:
+        logger.info("Creating new chat session")
+        result = await chat_handler.create_new_session()
+        
+        if result["success"]:
+            logger.info(f"New session created: {result['thread_id']}")
+            return result
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=result.get("message", "Failed to create new session")
+            )
+            
+    except Exception as e:
+        logger.error(f"Error creating new session: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error creating new session: {str(e)}"
+        )
+
+
+@app.delete("/sessions/{thread_id}")
+async def clear_session(thread_id: str):
+    """
+    Clear a specific chat session.
+    
+    Args:
+        thread_id: The thread ID of the session to clear
+        
+    Returns:
+        JSON with operation status
+    """
+    try:
+        logger.info(f"Clearing session: {thread_id}")
+        result = await chat_handler.clear_session(thread_id)
+        
+        if result["success"]:
+            logger.info(f"Session cleared successfully: {thread_id}")
+            return result
+        else:
+            # Return 404 if session not found
+            if "not found" in result.get("message", "").lower():
+                raise HTTPException(
+                    status_code=404,
+                    detail=result.get("message", "Session not found")
+                )
+            else:
+                raise HTTPException(
+                    status_code=500,
+                    detail=result.get("message", "Failed to clear session")
+                )
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error clearing session {thread_id}: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error clearing session: {str(e)}"
+        )
+
+
+@app.get("/sessions")
+async def get_active_sessions():
+    """
+    Get list of all active chat sessions.
+    
+    Returns:
+        JSON with list of active thread IDs
+    """
+    try:
+        logger.info("Getting active sessions")
+        result = await chat_handler.get_active_sessions()
+        
+        if result["success"]:
+            logger.info(f"Found {result['session_count']} active sessions")
+            return result
+        else:
+            raise HTTPException(
+                status_code=500,
+                detail=result.get("message", "Failed to get active sessions")
+            )
+            
+    except Exception as e:
+        logger.error(f"Error getting active sessions: {str(e)}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error getting active sessions: {str(e)}"
+        )
+
+
 @app.get("/")
 async def root():
     """Root endpoint with API information."""
@@ -334,7 +443,12 @@ async def root():
             "health": "/health",
             "models": "/models",
             "mcp_status": "/mcp/status",
-            "integration_test": "/test/integration"
+            "integration_test": "/test/integration",
+            "sessions": {
+                "create_new": "/sessions/new",
+                "clear": "/sessions/{thread_id}",
+                "list_active": "/sessions"
+            }
         },
         "documentation": "/docs"
     }

@@ -4,7 +4,7 @@ Chat completion handler that uses MCPAgent from moba_agent.
 
 import logging
 import time
-from typing import List, Dict, Any, Optional
+from typing import List, Dict, Any, Optional, Set
 from uuid import uuid4
 
 from .models import (
@@ -25,6 +25,9 @@ class ChatCompletionHandler:
         self.agent = None
         self.config = None
         self._init_task = None
+        # Session management
+        self._active_sessions: Set[str] = set()
+        self._session_counter = 0
         logger.info("Initialized chat completion handler with MCPAgent")
     
     async def initialize(self):
@@ -51,13 +54,15 @@ class ChatCompletionHandler:
     
     async def process_chat_completion(
         self,
-        request: ChatCompletionRequest
+        request: ChatCompletionRequest,
+        thread_id: Optional[str] = None
     ) -> ChatCompletionResponse:
         """
         Process chat completion request using MCPAgent.
         
         Args:
             request: Chat completion request
+            thread_id: Optional thread ID for session management. If not provided, creates a new session.
             
         Returns:
             Chat completion response
@@ -79,9 +84,15 @@ class ChatCompletionHandler:
             # TODO: Consider how to pass full conversation history
             message_content = user_message.content
             
-            # Use a thread_id based on the conversation (could be session-based in production)
-            # For now, use a default thread_id
-            thread_id = "default"
+            # Generate or use provided thread_id for session management
+            if thread_id is None:
+                # Generate a new thread_id for this session
+                thread_id = self._generate_thread_id()
+                logger.info(f"Created new session with thread_id: {thread_id}")
+            elif thread_id not in self._active_sessions:
+                # Register existing thread_id
+                self._active_sessions.add(thread_id)
+                logger.info(f"Registered existing thread_id: {thread_id}")
             
             logger.info(f"Invoking MCPAgent with message: {message_content[:100]}...")
             
@@ -168,6 +179,115 @@ class ChatCompletionHandler:
         """Get available resources from MCPAgent."""
         await self.ensure_initialized()
         return await self.agent.get_available_resources()
+    
+    def _generate_thread_id(self) -> str:
+        """Generate a unique thread ID for a new session."""
+        self._session_counter += 1
+        thread_id = f"session_{self._session_counter}_{uuid4().hex[:8]}"
+        self._active_sessions.add(thread_id)
+        return thread_id
+    
+    async def clear_session(self, thread_id: str) -> Dict[str, Any]:
+        """
+        Clear a specific chat session.
+        
+        Args:
+            thread_id: The thread ID of the session to clear
+            
+        Returns:
+            Dictionary with clear operation status
+        """
+        try:
+            # Ensure agent is initialized
+            await self.ensure_initialized()
+            
+            logger.info(f"Clearing session for thread_id: {thread_id}")
+            
+            # Check if thread_id exists
+            if thread_id not in self._active_sessions:
+                logger.warning(f"Thread ID {thread_id} not found in active sessions")
+                return {
+                    "success": False,
+                    "message": f"Session with thread_id '{thread_id}' not found",
+                    "thread_id": thread_id
+                }
+            
+            # Clear the thread's resource injection tracking in MCPAgent
+            if hasattr(self.agent, '_thread_resources_injected'):
+                if thread_id in self.agent._thread_resources_injected:
+                    del self.agent._thread_resources_injected[thread_id]
+                    logger.info(f"Cleared resource injection tracking for thread_id: {thread_id}")
+            
+            # Note: LangGraph's MemorySaver doesn't provide a direct clear method per thread
+            # The conversation history will be overwritten when a new conversation starts
+            # For a complete clear, we would need to implement a custom checkpointer
+            
+            # Remove from active sessions
+            self._active_sessions.discard(thread_id)
+            
+            logger.info(f"Successfully cleared session for thread_id: {thread_id}")
+            return {
+                "success": True,
+                "message": f"Session cleared successfully",
+                "thread_id": thread_id,
+                "cleared_components": ["resource_injection", "active_session"]
+            }
+            
+        except Exception as e:
+            logger.error(f"Error clearing session for thread_id {thread_id}: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error clearing session: {str(e)}",
+                "thread_id": thread_id
+            }
+    
+    async def create_new_session(self) -> Dict[str, Any]:
+        """
+        Create a new chat session with a unique thread ID.
+        
+        Returns:
+            Dictionary with new session information
+        """
+        try:
+            # Ensure agent is initialized
+            await self.ensure_initialized()
+            
+            # Generate new thread_id
+            thread_id = self._generate_thread_id()
+            
+            logger.info(f"Created new session with thread_id: {thread_id}")
+            return {
+                "success": True,
+                "thread_id": thread_id,
+                "message": "New session created successfully"
+            }
+            
+        except Exception as e:
+            logger.error(f"Error creating new session: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error creating new session: {str(e)}"
+            }
+    
+    async def get_active_sessions(self) -> Dict[str, Any]:
+        """
+        Get list of all active session thread IDs.
+        
+        Returns:
+            Dictionary with active sessions information
+        """
+        try:
+            return {
+                "success": True,
+                "active_sessions": list(self._active_sessions),
+                "session_count": len(self._active_sessions)
+            }
+        except Exception as e:
+            logger.error(f"Error getting active sessions: {str(e)}")
+            return {
+                "success": False,
+                "message": f"Error getting active sessions: {str(e)}"
+            }
     
     async def test_integration(self) -> Dict[str, Any]:
         """
