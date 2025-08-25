@@ -9,10 +9,12 @@ from uuid import uuid4
 
 from .models import (
     ChatMessage, ChatCompletionRequest, ChatCompletionResponse, 
-    MessageRole, Choice
+    MessageRole, Choice, MCPQueryResult, VisualizationSpec
 )
 from moba_agent import MCPAgent
 from moba_agent.config import Config
+from moba_agent.visualization import DataVisualizationAnalyzer
+from moba_agent.data_transformer import DataTransformer
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +30,10 @@ class ChatCompletionHandler:
         # Session management
         self._active_sessions: Set[str] = set()
         self._session_counter = 0
-        logger.info("Initialized chat completion handler with MCPAgent")
+        # Visualization components
+        self.visualization_analyzer = DataVisualizationAnalyzer()
+        self.data_transformer = DataTransformer()
+        logger.info("Initialized chat completion handler with MCPAgent and visualization support")
     
     async def initialize(self):
         """Initialize the MCPAgent asynchronously."""
@@ -102,6 +107,28 @@ class ChatCompletionHandler:
                 thread_id=thread_id
             )
             
+            # Check for query results and process visualization
+            query_result = None
+            visualization = None
+            
+            if isinstance(response_content, str):
+                # Detect if response contains a query result
+                detected_result = self._detect_query_result(response_content)
+                if detected_result:
+                    # Process visualization
+                    visualization = self._process_visualization(detected_result)
+                    
+                    # Create MCPQueryResult
+                    query_result = MCPQueryResult(
+                        success=True,
+                        data=detected_result.get('rows', []),
+                        columns=detected_result.get('columns', []),
+                        row_count=detected_result.get('row_count', len(detected_result.get('rows', []))),
+                        query=detected_result.get('query', ''),
+                        visualization=visualization
+                    )
+                    logger.info("Query result detected and visualization processed")
+            
             # Create response in OpenAI format
             # Get model with fallback
             model_name = request.model
@@ -118,18 +145,30 @@ class ChatCompletionHandler:
                 model_name = "gemini-2.5-flash"  # Emergency fallback
             
             logger.info(f"Using model: {model_name}")
+            
+            # Build choice with optional visualization
+            choice_data = {
+                "index": 0,
+                "message": ChatMessage(
+                    role=MessageRole.ASSISTANT,
+                    content=response_content
+                ),
+                "finish_reason": "stop"
+            }
+            
+            # Add query result if detected
+            if query_result:
+                choice_data["query_result"] = query_result
+            
+            # Add visualization if processed
+            if visualization:
+                choice_data["visualization"] = visualization
+            
             response = ChatCompletionResponse(
                 id=f"chatcmpl-{uuid4()}",
                 created=int(time.time()),
                 model=model_name,
-                choices=[Choice(
-                    index=0,
-                    message=ChatMessage(
-                        role=MessageRole.ASSISTANT,
-                        content=response_content
-                    ),
-                    finish_reason="stop"
-                )]
+                choices=[Choice(**choice_data)]
             )
             
             logger.info("Successfully processed chat completion with MCPAgent")
@@ -186,6 +225,96 @@ class ChatCompletionHandler:
         thread_id = f"session_{self._session_counter}_{uuid4().hex[:8]}"
         self._active_sessions.add(thread_id)
         return thread_id
+    
+    def _detect_query_result(self, response_content: str) -> Optional[Dict[str, Any]]:
+        """
+        Detect if response contains a query result from execute_query_mherb.
+        
+        Args:
+            response_content: The response content from MCPAgent
+            
+        Returns:
+            Query result dictionary if found, None otherwise
+        """
+        try:
+            # Check if response mentions query execution
+            if "execute_query" not in response_content.lower() and "query result" not in response_content.lower():
+                return None
+            
+            # Try to extract JSON from response
+            import re
+            import json
+            
+            # Look for JSON pattern with columns and rows
+            json_patterns = [
+                r'\{[^{}]*"columns"[^{}]*"rows"[^{}]*\}',
+                r'\{[^}]*"data"[^}]*"columns"[^}]*\}'
+            ]
+            
+            for pattern in json_patterns:
+                matches = re.findall(pattern, response_content, re.DOTALL)
+                for match in matches:
+                    try:
+                        # Clean up the match
+                        cleaned = match.replace('\n', ' ').strip()
+                        query_result = json.loads(cleaned)
+                        
+                        # Validate structure
+                        if 'columns' in query_result and 'rows' in query_result:
+                            logger.info(f"Detected query result with {len(query_result.get('rows', []))} rows")
+                            return query_result
+                    except json.JSONDecodeError:
+                        continue
+            
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error detecting query result: {e}")
+            return None
+    
+    def _process_visualization(self, query_result: Dict[str, Any]) -> Optional[VisualizationSpec]:
+        """
+        Process query result to generate visualization specification.
+        
+        Args:
+            query_result: Query result dictionary with columns and rows
+            
+        Returns:
+            VisualizationSpec if successful, None otherwise
+        """
+        try:
+            logger.info("Processing visualization for query result")
+            
+            # Analyze query result
+            viz_spec = self.visualization_analyzer.analyze_query_result(query_result)
+            
+            # Transform data for visualization
+            if viz_spec and 'chart_type' in viz_spec:
+                chart_data = self.data_transformer.transform_for_chart(
+                    query_result,
+                    viz_spec['chart_type'],
+                    viz_spec.get('config', {})
+                )
+                
+                # Update viz_spec with transformed data
+                viz_spec['data'] = chart_data
+            
+            logger.info(f"Generated {viz_spec.get('chart_type', 'unknown')} visualization")
+            
+            # Convert to VisualizationSpec model
+            return VisualizationSpec(
+                chart_type=viz_spec.get('chart_type', 'table'),
+                recommended=viz_spec.get('recommended', True),
+                alternatives=viz_spec.get('alternatives', []),
+                column_types=viz_spec.get('column_types', {}),
+                config=viz_spec.get('config', {}),
+                data=viz_spec.get('data'),
+                metadata=viz_spec.get('metadata')
+            )
+            
+        except Exception as e:
+            logger.error(f"Error processing visualization: {e}")
+            return None
     
     async def clear_session(self, thread_id: str) -> Dict[str, Any]:
         """

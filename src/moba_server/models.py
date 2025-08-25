@@ -79,6 +79,10 @@ class Choice(BaseModel):
         default=None,
         description="Database query result if a query was executed"
     )
+    visualization: Optional["VisualizationSpec"] = Field(
+        default=None,
+        description="Visualization specification if data was queried"
+    )
 
 
 class ChatCompletionResponse(BaseModel):
@@ -136,6 +140,36 @@ class HealthResponse(BaseModel):
     )
 
 
+class VisualizationSpec(BaseModel):
+    """Specification for data visualization."""
+    chart_type: str = Field(
+        description="Type of chart (line, bar, pie, scatter, heatmap, table, etc.)"
+    )
+    recommended: bool = Field(
+        default=True,
+        description="Whether this was the recommended chart type"
+    )
+    alternatives: Optional[List[str]] = Field(
+        default=None,
+        description="Alternative chart types that could work"
+    )
+    column_types: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Detected column data types"
+    )
+    config: Dict[str, Any] = Field(
+        description="Chart configuration (axes, colors, etc.)"
+    )
+    data: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Transformed data ready for charting"
+    )
+    metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Additional metadata about the visualization"
+    )
+
+
 class MCPQueryResult(BaseModel):
     """Result from MCP database query."""
     success: bool = Field(description="Whether the query was successful")
@@ -154,6 +188,14 @@ class MCPQueryResult(BaseModel):
     row_count: Optional[int] = Field(
         default=None,
         description="Number of rows returned"
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description="Original SQL query executed"
+    )
+    visualization: Optional[VisualizationSpec] = Field(
+        default=None,
+        description="Visualization specification if data was analyzed"
     )
 
 
