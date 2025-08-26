@@ -3,6 +3,7 @@ MCP Agent Core with Gemini 2.5 Flash and LangGraph
 """
 
 import logging
+import json
 from typing import Dict, Any, List, Optional
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -228,7 +229,7 @@ class MCPAgent:
             self.logger.error(f"Failed to format resources context: {e}", exc_info=True)
             return None
     
-    async def invoke(self, message: str, thread_id: str = "default") -> str:
+    async def invoke(self, message: str, thread_id: str = "default") -> Dict[str, Any]:
         """
         Invoke the agent with a message
         
@@ -237,7 +238,9 @@ class MCPAgent:
             thread_id: Thread ID for conversation context
             
         Returns:
-            Agent response
+            Dict containing:
+                - content: Agent response text
+                - tool_results: Any structured data from tool calls
         """
         if not self._initialized:
             await self.initialize()
@@ -271,17 +274,79 @@ class MCPAgent:
                 config=config
             )
             
-            # Extract response
-            if response and "messages" in response:
-                last_message = response["messages"][-1]
-                if isinstance(last_message, AIMessage):
-                    result = last_message.content
-                else:
-                    result = str(last_message)
-            else:
-                result = str(response)
+            # Extract response and tool results
+            result_content = ""
+            tool_results = []
             
-            self.logger.debug(f"Agent response: {result[:100]}...")
+            if response and "messages" in response:
+                # Look through all messages for tool results and AI response
+                from langchain_core.messages import ToolMessage
+                
+                for msg in response["messages"]:
+                    # Check for tool messages that might contain query results
+                    if isinstance(msg, ToolMessage):
+                        try:
+                            # Parse tool content if it's a string containing JSON
+                            if isinstance(msg.content, str):
+                                import json
+                                # Try to parse as JSON
+                                if msg.content.strip().startswith('{'):
+                                    tool_data = json.loads(msg.content)
+                                    tool_results.append({
+                                        "tool_name": msg.name if hasattr(msg, 'name') else "unknown",
+                                        "data": tool_data
+                                    })
+                                    self.logger.debug(f"Found tool result from {msg.name if hasattr(msg, 'name') else 'unknown'}: {str(tool_data)[:200]}...")
+                            elif isinstance(msg.content, dict):
+                                tool_results.append({
+                                    "tool_name": msg.name if hasattr(msg, 'name') else "unknown", 
+                                    "data": msg.content
+                                })
+                                self.logger.debug(f"Found tool result dict from {msg.name if hasattr(msg, 'name') else 'unknown'}")
+                        except json.JSONDecodeError:
+                            # Not JSON, skip
+                            pass
+                        except Exception as e:
+                            self.logger.warning(f"Error processing tool message: {e}")
+                    
+                    # Get the final AI message content
+                    elif isinstance(msg, AIMessage):
+                        # Handle both string and list content
+                        if isinstance(msg.content, list):
+                            result_content = "\n".join(str(item) for item in msg.content)
+                        elif isinstance(msg.content, str):
+                            result_content = msg.content
+                        else:
+                            result_content = str(msg.content)
+                
+                # If no AI message found, use the last message
+                if not result_content:
+                    last_message = response["messages"][-1]
+                    if isinstance(last_message, AIMessage):
+                        # Handle both string and list content
+                        if isinstance(last_message.content, list):
+                            result_content = "\n".join(str(item) for item in last_message.content)
+                        elif isinstance(last_message.content, str):
+                            result_content = last_message.content
+                        else:
+                            result_content = str(last_message.content)
+                    else:
+                        result_content = str(last_message)
+            else:
+                result_content = str(response)
+            
+            # Build response structure
+            result = {
+                "content": result_content,
+                "tool_results": tool_results
+            }
+            
+            # Safe logging of content
+            content_preview = result_content[:100] if isinstance(result_content, str) else str(result_content)[:100]
+            self.logger.debug(f"Agent response: {content_preview}...")
+            if tool_results:
+                self.logger.info(f"Found {len(tool_results)} tool results in response")
+            
             return result
             
         except Exception as e:

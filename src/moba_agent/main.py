@@ -125,7 +125,14 @@ class MCPAgentApp:
                 
                 # Get response
                 response = await self.agent.invoke(user_input, thread_id)
-                print(response)
+                # Handle new response format
+                if isinstance(response, dict):
+                    print(response.get("content", ""))
+                    # Optionally log tool results for debugging
+                    if response.get("tool_results"):
+                        self.logger.debug(f"Tool results: {response['tool_results']}")
+                else:
+                    print(response)
                 
             except KeyboardInterrupt:
                 print("\n\nInterrupted by user")

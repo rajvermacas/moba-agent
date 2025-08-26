@@ -101,18 +101,44 @@ class ChatCompletionHandler:
             
             logger.info(f"Invoking MCPAgent with message: {message_content[:100]}...")
             
-            # Call MCPAgent
-            response_content = await self.agent.invoke(
+            # Call MCPAgent - now returns dict with content and tool_results
+            agent_response = await self.agent.invoke(
                 message=message_content,
                 thread_id=thread_id
             )
+            
+            # Extract content and tool results
+            response_content = agent_response.get("content", "") if isinstance(agent_response, dict) else str(agent_response)
+            tool_results = agent_response.get("tool_results", []) if isinstance(agent_response, dict) else []
             
             # Check for query results and process visualization
             query_result = None
             visualization = None
             
-            if isinstance(response_content, str):
-                # Detect if response contains a query result
+            # First check tool results for execute_query_mherb
+            for tool_result in tool_results:
+                if tool_result.get("tool_name") == "execute_query_mherb":
+                    query_data = tool_result.get("data", {})
+                    if query_data and "columns" in query_data and "rows" in query_data:
+                        logger.info(f"Found query result from execute_query_mherb tool with {len(query_data.get('rows', []))} rows")
+                        
+                        # Process visualization
+                        visualization = self._process_visualization(query_data)
+                        
+                        # Create MCPQueryResult
+                        query_result = MCPQueryResult(
+                            success=True,
+                            data=query_data.get('rows', []),
+                            columns=query_data.get('columns', []),
+                            row_count=query_data.get('row_count', len(query_data.get('rows', []))),
+                            query=query_data.get('query', ''),
+                            visualization=visualization
+                        )
+                        logger.info("Query result extracted from tool results and visualization processed")
+                        break
+            
+            # Fall back to detecting from response content if no tool results
+            if not query_result and isinstance(response_content, str):
                 detected_result = self._detect_query_result(response_content)
                 if detected_result:
                     # Process visualization
@@ -127,7 +153,7 @@ class ChatCompletionHandler:
                         query=detected_result.get('query', ''),
                         visualization=visualization
                     )
-                    logger.info("Query result detected and visualization processed")
+                    logger.info("Query result detected from response content and visualization processed")
             
             # Create response in OpenAI format
             # Get model with fallback
