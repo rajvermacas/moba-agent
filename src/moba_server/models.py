@@ -147,13 +147,21 @@ class MCPQueryResult(BaseModel):
         default=None,
         description="Column names"
     )
-    error: Optional[str] = Field(
-        default=None,
-        description="Error message if query failed"
-    )
     row_count: Optional[int] = Field(
         default=None,
         description="Number of rows returned"
+    )
+    query: Optional[str] = Field(
+        default=None,
+        description="SQL query that was executed"
+    )
+    # execution_time: Optional[float] = Field(
+    #     default=0,
+    #     description="Query execution time in seconds"
+    # )
+    error: Optional[str] = Field(
+        default=None,
+        description="Error message if query failed"
     )
 
 

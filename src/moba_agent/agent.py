@@ -3,14 +3,16 @@ MCP Agent Core with Gemini 2.5 Flash and LangGraph
 """
 
 import logging
-from typing import Dict, Any, List, Optional
+import re
+import json
+from typing import Dict, Any, List, Optional, Union
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 from langgraph.graph import StateGraph, MessagesState, START
 from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from .config import Config
 from .resources import ResourceHandler
 from .tools import ToolHandler
@@ -286,6 +288,131 @@ class MCPAgent:
             
         except Exception as e:
             self.logger.error(f"Failed to invoke agent: {e}", exc_info=True)
+            raise
+
+    async def invoke_with_query_tracking(self, message: str, thread_id: str = "default") -> Dict[str, Any]:
+        """
+        Invoke the agent with a message and track database query results
+        
+        Args:
+            message: User message
+            thread_id: Thread ID for conversation context
+            
+        Returns:
+            Dict containing:
+                - response: Agent response text (from last AIMessage)
+                - query_result: Database query result if any execute_query_* tool was called
+        """
+        if not self._initialized:
+            await self.initialize()
+        
+        self.logger.debug(f"Invoking agent with query tracking for message: {message[:100]}...")
+        
+        try:
+            # Prepare messages list
+            messages = []
+            
+            # Check if this is the first message for this thread
+            if thread_id not in self._thread_resources_injected:
+                # Inject resources context on first message
+                resources_context = await self._format_resources_context()
+                if resources_context:
+                    messages.append(resources_context)
+                    self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
+                
+                # Mark thread as having resources injected
+                self._thread_resources_injected[thread_id] = True
+            
+            # Add the user message
+            input_message = HumanMessage(content=message)
+            messages.append(input_message)
+            
+            config = {"configurable": {"thread_id": thread_id}}
+            
+            # Invoke agent
+            response = await self.agent.ainvoke(
+                {"messages": messages},
+                config=config
+            )
+            
+            # Initialize result dict
+            result = {
+                "response": "",
+                "query_result": None
+            }
+            
+            # Process response messages
+            if response and "messages" in response:
+                all_messages = response["messages"]
+                self.logger.debug(f"Processing {len(all_messages)} messages from agent response")
+                
+                # Collect all AIMessages and ToolMessages
+                ai_messages = []
+                query_result = None
+                query_pattern = re.compile(r'^execute_query_.*$')
+                
+                for msg in all_messages:
+                    self.logger.debug(f"Processing message type: {type(msg).__name__}")
+                    
+                    if isinstance(msg, AIMessage):
+                        ai_messages.append(msg)
+                        self.logger.debug(f"Found AIMessage with content: {msg.content[:100] if msg.content else 'None'}...")
+                    
+                    elif isinstance(msg, ToolMessage):
+                        # Check if this is a query tool
+                        tool_name = getattr(msg, 'name', '')
+                        if not tool_name:
+                            # Try to get tool name from tool_call_id or other attributes
+                            tool_call_id = getattr(msg, 'tool_call_id', '')
+                            if tool_call_id:
+                                # Extract tool name from tool_call_id if possible
+                                parts = tool_call_id.split('_')
+                                if len(parts) >= 3 and parts[0] == 'call':
+                                    tool_name = '_'.join(parts[1:])
+                        
+                        self.logger.debug(f"Found ToolMessage with tool_name: '{tool_name}'")
+                        
+                        if query_pattern.match(tool_name):
+                            self.logger.info(f"Found query tool result: {tool_name}")
+                            try:
+                                # Parse the tool result
+                                content = msg.content
+                                if isinstance(content, str):
+                                    tool_result = json.loads(content)
+                                else:
+                                    tool_result = content
+                                
+                                # Store the last query result (overwrite if multiple queries)
+                                query_result = tool_result
+                                self.logger.info(f"Captured query result with {len(tool_result.get('rows', []))} rows")
+                                
+                            except (json.JSONDecodeError, AttributeError) as e:
+                                self.logger.warning(f"Failed to parse tool result from {tool_name}: {e}")
+                
+                # Get response text from the LAST AIMessage
+                if ai_messages:
+                    last_ai_message = ai_messages[-1]
+                    result["response"] = last_ai_message.content or ""
+                    self.logger.debug(f"Using last AIMessage content as response: {result['response'][:100]}...")
+                else:
+                    # Fallback to string representation
+                    result["response"] = str(response)
+                    self.logger.warning("No AIMessage found, using string representation of response")
+                
+                # Set query result if found
+                if query_result:
+                    result["query_result"] = query_result
+                    self.logger.info("Query result captured successfully")
+                
+            else:
+                result["response"] = str(response)
+                self.logger.warning("No messages found in response, using string representation")
+            
+            self.logger.debug(f"Agent response with query tracking completed. Query result present: {result['query_result'] is not None}")
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Failed to invoke agent with query tracking: {e}", exc_info=True)
             raise
     
     async def stream(self, message: str, thread_id: str = "default"):

@@ -4,12 +4,13 @@ Chat completion handler that uses MCPAgent from moba_agent.
 
 import logging
 import time
+import json
 from typing import List, Dict, Any, Optional, Set
 from uuid import uuid4
 
 from .models import (
     ChatMessage, ChatCompletionRequest, ChatCompletionResponse, 
-    MessageRole, Choice
+    MessageRole, Choice, MCPQueryResult
 )
 from moba_agent import MCPAgent
 from moba_agent.config import Config
@@ -96,11 +97,38 @@ class ChatCompletionHandler:
             
             logger.info(f"Invoking MCPAgent with message: {message_content[:100]}...")
             
-            # Call MCPAgent
-            response_content = await self.agent.invoke(
+            # Call MCPAgent with query tracking
+            agent_result = await self.agent.invoke_with_query_tracking(
                 message=message_content,
                 thread_id=thread_id
             )
+            
+            # Extract response and query result
+            response_content = agent_result.get("response", "")
+            raw_query_result = agent_result.get("query_result")
+            
+            # Transform query result to UI-expected format
+            transformed_query_result = None
+            if raw_query_result:
+                logger.info("Transforming raw query result to UI format")
+                try:
+                    # Transform MCP query result format to UI format
+                    transformed_query_result = MCPQueryResult(
+                        success=True,
+                        data=raw_query_result.get("rows", []),  # Rename 'rows' to 'data'
+                        columns=raw_query_result.get("columns", []),
+                        row_count=raw_query_result.get("row_count", 0),
+                        query=raw_query_result.get("query", ""),
+                        # execution_time=0  # Optional field, set to 0 for now
+                    )
+                    logger.info(f"Successfully transformed query result with {len(raw_query_result.get('rows', []))} rows")
+                except Exception as e:
+                    logger.error(f"Failed to transform query result: {e}")
+                    # Create error result
+                    transformed_query_result = MCPQueryResult(
+                        success=False,
+                        error=f"Failed to transform query result: {str(e)}"
+                    )
             
             # Create response in OpenAI format
             # Get model with fallback
@@ -128,7 +156,8 @@ class ChatCompletionHandler:
                         role=MessageRole.ASSISTANT,
                         content=response_content
                     ),
-                    finish_reason="stop"
+                    finish_reason="stop",
+                    query_result=transformed_query_result
                 )]
             )
             
