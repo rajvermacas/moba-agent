@@ -15,7 +15,7 @@
       "name": "moba_mcp_server",
       "transport": "sse",
       "url": "http://localhost:8002/sse",
-      "enabled": true,
+      "enabled": false,
       "reconnect": {
         "enabled": true,
         "max_attempts": 5,

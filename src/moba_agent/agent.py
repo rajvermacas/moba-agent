@@ -153,8 +153,28 @@ class MCPAgent:
         """Create a simple agent without tools"""
         def call_model(state: MessagesState):
             """Call the LLM model"""
-            response = self.llm.invoke(state["messages"])
-            return {"messages": [response]}
+            try:
+                response = self.llm.invoke(state["messages"])
+                return {"messages": [response]}
+            except AttributeError as e:
+                # Handle the 'int' object has no attribute 'name' error
+                # This is a known issue with langchain_google_genai finish_reason
+                self.logger.warning(f"Caught AttributeError in LLM invoke (likely finish_reason issue): {e}")
+                
+                # Try to extract the response content if it exists
+                # The error occurs during response processing, but the content might still be available
+                try:
+                    # Attempt to get partial response if available
+                    if hasattr(e, '__context__') and hasattr(e.__context__, 'args'):
+                        self.logger.debug(f"Error context: {e.__context__}")
+                    
+                    # Return an error message as fallback
+                    from langchain_core.messages import AIMessage
+                    error_msg = AIMessage(content="I encountered an issue processing the response. Please try again.")
+                    return {"messages": [error_msg]}
+                except Exception as inner_e:
+                    self.logger.error(f"Failed to handle AttributeError gracefully: {inner_e}")
+                    raise
         
         # Build state graph
         builder = StateGraph(MessagesState)
