@@ -24,6 +24,14 @@ class Config:
     agent_temperature: float = field(default_factory=lambda: float(os.getenv("AGENT_TEMPERATURE", "0.1")))
     agent_max_tokens: int = field(default_factory=lambda: int(os.getenv("AGENT_MAX_TOKENS", "4096")))
     
+    # Agent System Prompt
+    system_prompt: str = field(
+        default_factory=lambda: os.getenv(
+            "AGENT_SYSTEM_PROMPT", 
+            "You are a database expert who will help write sql query to execute to get the data in table format and then format it to show graph on UI"
+        )
+    )
+    
     # MCP Configuration File Path
     mcp_config_file: str = field(default_factory=lambda: os.getenv("MCP_CONFIG_FILE", "mcp_servers.json"))
     

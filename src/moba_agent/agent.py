@@ -136,9 +136,10 @@ class MCPAgent:
                 self.agent = create_react_agent(
                     self.llm,
                     self.tools,
+                    prompt=self.config.system_prompt,
                     checkpointer=self.checkpointer
                 )
-                self.logger.info("Created ReAct agent with MCP tools")
+                self.logger.info("Created ReAct agent with MCP tools and system prompt")
             else:
                 # Create simple agent without tools
                 self.agent = self._create_simple_agent()
