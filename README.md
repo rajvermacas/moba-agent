@@ -351,9 +351,15 @@ MIT License - see LICENSE file for details
 - Implements [Model Context Protocol](https://modelcontextprotocol.io/)
 - REST API by [FastAPI](https://fastapi.tiangolo.com/)
 
-## 📞 Support
-
-For issues, questions, or suggestions:
-- Open an issue on GitHub
-- Check existing issues for solutions
-- Review the documentation and examples
+## API Payload
+/chat/completions  
+{
+  "messages": [
+    {
+      "role": "user",
+      "content": "Hi how are you?"
+    }
+  ],
+  "max_tokens": 2000,
+  "temperature": 0.7
+}

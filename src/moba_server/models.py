@@ -79,6 +79,10 @@ class Choice(BaseModel):
         default=None,
         description="Database query result if a query was executed"
     )
+    graph: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Graph visualization data if generated from query result"
+    )
 
 
 class ChatCompletionResponse(BaseModel):
@@ -178,3 +182,17 @@ class MCPTool(BaseModel):
     name: str = Field(description="Tool name")
     description: Optional[str] = Field(default=None, description="Tool description")
     input_schema: Dict[str, Any] = Field(description="Tool input schema")
+
+
+class GraphData(BaseModel):
+    """Optional model for graph data validation."""
+    chart_type: str = Field(description="Type of chart (bar, line, pie, etc.)")
+    data: List[Dict[str, Any]] = Field(description="Chart data points")
+    title: str = Field(description="Chart title")
+    x_key: Optional[str] = Field(default=None, description="X-axis data key")
+    y_key: Optional[str] = Field(default=None, description="Y-axis data key")
+    x_label: Optional[str] = Field(default=None, description="X-axis label")
+    y_label: Optional[str] = Field(default=None, description="Y-axis label")
+    generated_at: int = Field(description="Unix timestamp when generated")
+    total_records: int = Field(description="Total records processed")
+    data_source: Optional[str] = Field(default="database_query", description="Source of the data")

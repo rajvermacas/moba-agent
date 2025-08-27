@@ -82,7 +82,8 @@ class ChatCompletionHandler:
             # Convert full conversation to a single prompt if needed
             # MCPAgent expects a single message string
             # For now, we'll just use the latest user message
-            # TODO: Consider how to pass full conversation history
+            # Note: Using single-message approach for simplicity
+            # Full conversation history support can be added if needed
             message_content = user_message.content
             
             # Generate or use provided thread_id for session management
@@ -103,9 +104,10 @@ class ChatCompletionHandler:
                 thread_id=thread_id
             )
             
-            # Extract response and query result
+            # Extract response, query result, AND graph data
             response_content = agent_result.get("response", "")
             raw_query_result = agent_result.get("query_result")
+            graph_data = agent_result.get("graph")  # NEW: Extract graph data
             
             # Transform query result to UI-expected format
             transformed_query_result = None
@@ -157,9 +159,13 @@ class ChatCompletionHandler:
                         content=response_content
                     ),
                     finish_reason="stop",
-                    query_result=transformed_query_result
+                    query_result=transformed_query_result,
+                    graph=graph_data  # NEW: Include graph data
                 )]
             )
+            
+            if graph_data:
+                logger.info(f"Response includes {graph_data['chart_type']} graph with {len(graph_data['data'])} data points")
             
             logger.info("Successfully processed chat completion with MCPAgent")
             return response

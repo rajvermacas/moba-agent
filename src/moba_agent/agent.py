@@ -5,6 +5,9 @@ MCP Agent Core with Gemini 2.5 Flash and LangGraph
 import logging
 import re
 import json
+import time
+from datetime import datetime
+from functools import wraps
 from typing import Dict, Any, List, Optional, Union
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_google_genai import ChatGoogleGenerativeAI
@@ -338,7 +341,8 @@ class MCPAgent:
             # Initialize result dict
             result = {
                 "response": "",
-                "query_result": None
+                "query_result": None,
+                "graph": None  # NEW: Add graph field
             }
             
             # Process response messages
@@ -403,12 +407,32 @@ class MCPAgent:
                 if query_result:
                     result["query_result"] = query_result
                     self.logger.info("Query result captured successfully")
+                    
+                    # NEW: Generate graph visualization if query result is available
+                    try:
+                        self.logger.info("Analyzing query result for graph visualization potential")
+                        from .graph_visualization import analyze_and_generate_graph
+                        
+                        graph_data = await analyze_and_generate_graph(
+                            query_result=query_result,
+                            llm=self.llm
+                        )
+                        
+                        if graph_data:
+                            result["graph"] = graph_data
+                            self.logger.info(f"Generated {graph_data['chart_type']} chart with {len(graph_data['data'])} data points")
+                        else:
+                            self.logger.info("Query result not suitable for visualization")
+                            
+                    except Exception as e:
+                        self.logger.error(f"Graph generation failed: {e}", exc_info=True)
+                        # Continue without graph - don't fail the entire request
                 
             else:
                 result["response"] = str(response)
                 self.logger.warning("No messages found in response, using string representation")
             
-            self.logger.debug(f"Agent response with query tracking completed. Query result present: {result['query_result'] is not None}")
+            self.logger.debug(f"Agent response with query tracking completed. Query result present: {result['query_result'] is not None}, Graph present: {result.get('graph') is not None}")
             return result
             
         except Exception as e:

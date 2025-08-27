@@ -50,4 +50,4 @@ poetry run python -m uvicorn src.moba_server.main:app \
     --host "${HOST}" \
     --port "${PORT}" \
     --log-level "${LOG_LEVEL}" \
-    --reload
+    # --reload
