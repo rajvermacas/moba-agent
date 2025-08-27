@@ -218,41 +218,20 @@ async def _get_chart_recommendation(prompt: str, llm) -> Dict[str, Any]:
     """
     Get chart recommendation from LLM.
     
-    Uses the provided Gemini LLM instance.
+    Modified to return visualization_needed flag for deterministic triggering.
+    Note: Direct LLM invocation removed - now handled by GraphVisualizationTool.
     """
     logger = logging.getLogger(__name__)
     
-    try:
-        # Use provided LLM instance for consistency
-        if llm:
-            llm_response = await llm.ainvoke([HumanMessage(content=prompt)])
-            response_text = llm_response.content
-        else:
-            raise Exception("LLM not available for chart analysis")
-        
-        # Extract JSON from response
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-        if not json_match:
-            raise ValueError("No JSON found in LLM response")
-        
-        recommendation = json.loads(json_match.group())
-        
-        # Validate recommendation structure
-        required_fields = ["chart_type", "reasoning", "config"]
-        if not all(field in recommendation for field in required_fields):
-            raise ValueError("Incomplete recommendation from LLM")
-        
-        config = recommendation["config"]
-        if not all(field in config for field in ["x_axis", "y_axis", "title"]):
-            raise ValueError("Incomplete config in recommendation")
-        
-        logger.info(f"LLM recommended {recommendation['chart_type']} chart: {recommendation['reasoning']}")
-        return recommendation
-        
-    except Exception as e:
-        logger.error(f"Failed to get chart recommendation: {e}")
-        # Return None to trigger fallback
-        return None
+    # This function now returns metadata for the tool to process
+    # The actual LLM call happens in GraphVisualizationTool
+    return {
+        "visualization_needed": True,  # Deterministic flag
+        "chart_type": "pending",  # Will be determined by tool
+        "reasoning": "Visualization analysis required",
+        "prompt": prompt,  # Pass prompt for tool to use
+        "query_results": None  # Will be populated by caller
+    }
 
 
 def _get_fallback_recommendation(data_analysis: Dict) -> Dict[str, Any]:
@@ -382,20 +361,21 @@ async def analyze_and_generate_graph(
     
     viz_logger.log_llm_prompt(chart_prompt)
     
-    # Get recommendation from LLM or fallback
-    chart_recommendation = None
-    if llm:
-        chart_recommendation = await _get_chart_recommendation(chart_prompt, llm)
+    # Return metadata for tool-based processing
+    # The actual LLM call will happen in GraphVisualizationTool
+    chart_metadata = await _get_chart_recommendation(chart_prompt, llm)
+    chart_metadata["query_results"] = query_result
+    chart_metadata["data_analysis"] = data_analysis
     
-    if not chart_recommendation:
-        viz_logger.log_fallback("LLM recommendation failed or unavailable")
-        chart_recommendation = _get_fallback_recommendation(data_analysis)
-        
-    if not chart_recommendation:
-        logger.warning("Could not determine appropriate chart type")
-        return None
+    # Check if visualization is needed
+    if chart_metadata.get("visualization_needed"):
+        logger.info("Visualization needed flag is True - deferring to GraphVisualizationTool")
+        # Return metadata for agent to process with GraphVisualizationTool
+        return chart_metadata
     
-    viz_logger.log_llm_response("", chart_recommendation)
+    # Fallback path (shouldn't normally reach here with new architecture)
+    viz_logger.log_fallback("Using fallback recommendation")
+    chart_recommendation = _get_fallback_recommendation(data_analysis)
     
     # Step 4: Transform data to chart format
     viz_logger.log_transformation_start(

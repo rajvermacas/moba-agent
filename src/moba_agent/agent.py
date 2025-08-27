@@ -19,6 +19,7 @@ from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, Tool
 from .config import Config
 from .resources import ResourceHandler
 from .tools import ToolHandler
+from .graph_visualization_tool import GraphVisualizationTool
 
 
 class MCPAgent:
@@ -46,6 +47,9 @@ class MCPAgent:
         self.resource_handler = ResourceHandler(self.config)
         self.tool_handler = ToolHandler(self.config)
         
+        # Initialize graph visualization tool (will be set after agent init)
+        self.graph_viz_tool = None
+        
         # Track initialization state
         self._initialized = False
         
@@ -72,6 +76,10 @@ class MCPAgent:
             
             # Create LangGraph agent
             await self._create_agent()
+            
+            # Initialize GraphVisualizationTool after agent creation
+            self.graph_viz_tool = GraphVisualizationTool(self)
+            self.logger.info("GraphVisualizationTool initialized")
             
             self._initialized = True
             self.logger.info("Agent initialization completed successfully")
@@ -408,19 +416,35 @@ class MCPAgent:
                     result["query_result"] = query_result
                     self.logger.info("Query result captured successfully")
                     
-                    # NEW: Generate graph visualization if query result is available
+                    # NEW: Check for visualization need and invoke GraphVisualizationTool
                     try:
                         self.logger.info("Analyzing query result for graph visualization potential")
                         from .graph_visualization import analyze_and_generate_graph
                         
-                        graph_data = await analyze_and_generate_graph(
+                        # Get chart metadata (includes visualization_needed flag)
+                        chart_metadata = await analyze_and_generate_graph(
                             query_result=query_result,
                             llm=self.llm
                         )
                         
-                        if graph_data:
-                            result["graph"] = graph_data
-                            self.logger.info(f"Generated {graph_data['chart_type']} chart with {len(graph_data['data'])} data points")
+                        # Check if visualization is needed (deterministic flag)
+                        if chart_metadata and chart_metadata.get("visualization_needed"):
+                            self.logger.info("Visualization needed flag is True - invoking GraphVisualizationTool")
+                            
+                            # Manually invoke GraphVisualizationTool
+                            if self.graph_viz_tool:
+                                viz_result = await self.graph_viz_tool.arun(
+                                    query_results=query_result,
+                                    context=all_messages
+                                )
+                                
+                                if viz_result["status"] == "success":
+                                    result["graph"] = viz_result["graph_data"]
+                                    self.logger.info(f"Generated {viz_result['chart_type']} chart via tool")
+                                else:
+                                    self.logger.warning(f"Graph visualization tool returned error: {viz_result.get('error')}")
+                            else:
+                                self.logger.warning("GraphVisualizationTool not initialized")
                         else:
                             self.logger.info("Query result not suitable for visualization")
                             
