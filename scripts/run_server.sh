@@ -66,5 +66,4 @@ echo -e "${GREEN}▶️  Starting FastAPI server...${NC}"
         --port "${PORT}" \
         --log-level "${LOG_LEVEL}" \
         2>&1 | tee -a logs/moba_server.log
-    # --reload
 } || handle_error
