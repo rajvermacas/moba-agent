@@ -27,6 +27,7 @@ fi
 
 # Install dependencies using Poetry
 echo -e "${YELLOW}📦 Installing dependencies with Poetry...${NC}"
+poetry lock
 poetry install
 
 # Create logs directory if it doesn't exist
@@ -44,10 +45,26 @@ echo -e "${GREEN}🌐 Server will be available at: http://localhost:${PORT}${NC}
 echo -e "${GREEN}📝 Logs will be written to: logs/moba_server.log${NC}"
 echo -e "${GREEN}🔧 Environment: $(poetry run python --version)${NC}"
 
-# Start the server
+# Function to handle errors
+handle_error() {
+    local exit_code=$?
+    echo -e "${RED}❌ Error: Server failed to start (Exit code: ${exit_code})${NC}"
+    echo -e "${RED}📋 Troubleshooting steps:${NC}"
+    echo -e "${YELLOW}   1. Check if port ${PORT} is already in use: lsof -i :${PORT}${NC}"
+    echo -e "${YELLOW}   2. Verify src.moba_server.main:app exists and is valid${NC}"
+    echo -e "${YELLOW}   3. Check logs/moba_server.log for detailed error messages${NC}"
+    echo -e "${YELLOW}   4. Ensure all dependencies are installed: poetry install${NC}"
+    echo -e "${YELLOW}   5. Check Python import paths: echo \$PYTHONPATH${NC}"
+    exit ${exit_code}
+}
+
+# Start the server with error handling
 echo -e "${GREEN}▶️  Starting FastAPI server...${NC}"
-poetry run python -m uvicorn src.moba_server.main:app \
-    --host "${HOST}" \
-    --port "${PORT}" \
-    --log-level "${LOG_LEVEL}" \
+{
+    poetry run python -m uvicorn src.moba_server.main:app \
+        --host "${HOST}" \
+        --port "${PORT}" \
+        --log-level "${LOG_LEVEL}" \
+        2>&1 | tee -a logs/moba_server.log
     # --reload
+} || handle_error
