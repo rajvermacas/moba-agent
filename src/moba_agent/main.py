@@ -124,7 +124,7 @@ class MCPAgentApp:
                 print("\n🤖 Agent: ", end="", flush=True)
                 
                 # Get response
-                response = await self.agent.invoke(user_input, thread_id)
+                response = await self.agent.invoke_with_query_tracking(user_input, thread_id)
                 print(response)
                 
             except KeyboardInterrupt:

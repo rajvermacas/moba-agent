@@ -578,7 +578,7 @@ class MCPAgent:
             - User explicitly asks for charts/graphs/visualization
             - Data shows trends, comparisons, or distributions
             - Results would be clearer in visual format
-            - Try to always provide visualization unless the data is just not compatible
+            - Try to always provide visualization (Mandatory)
             
             Choose appropriate chart types based on data characteristics:
             - Bar/Column: Categorical comparisons
@@ -595,10 +595,10 @@ class MCPAgent:
             # If we have query results, add them to context
             if query_result:
                 result_summary = f"\nDatabase Query Result Summary:\n"
-                result_summary += f"- Rows returned: {len(query_result.get('data', []))}\n"
-                if query_result.get('data'):
-                    result_summary += f"- Columns: {list(query_result['data'][0].keys())}\n"
-                    result_summary += f"- Sample data: {query_result['data'][:3]}\n"
+                result_summary += f"- Rows returned: {len(query_result.get('rows', []))}\n"
+                if query_result.get('rows'):
+                    result_summary += f"- Columns: {list(query_result['rows'][0].keys())}\n"
+                    result_summary += f"- Sample rows: {query_result['rows'][:3]}\n"
                 enhanced_messages.append(SystemMessage(content=result_summary))
             
             # Get structured response from LLM
