@@ -226,13 +226,17 @@ class TestDeterministicTriggering:
         """Test that tool is invoked based on deterministic flag"""
         from src.moba_agent.graph_visualization import _get_chart_recommendation
         
-        # Call the modified function
-        result = await _get_chart_recommendation("test prompt", None)
+        # Test with should_visualize=True
+        result_true = await _get_chart_recommendation("test prompt", True, None)
+        assert result_true["visualization_needed"] == True
+        assert result_true["chart_type"] == "pending"
+        assert "prompt" in result_true
         
-        # Verify it returns the deterministic flag
-        assert result["visualization_needed"] == True
-        assert result["chart_type"] == "pending"
-        assert "prompt" in result
+        # Test with should_visualize=False
+        result_false = await _get_chart_recommendation("test prompt", False, None)
+        assert result_false["visualization_needed"] == False
+        assert result_false["chart_type"] == "pending"
+        assert "prompt" in result_false
     
     @pytest.mark.asyncio
     async def test_no_langchain_tool_selection(self):

@@ -325,6 +325,16 @@ class MCPAgent:
             
             # Check if this is the first message for this thread
             if thread_id not in self._thread_resources_injected:
+                # Add system instruction for visualization marker
+                viz_instruction = SystemMessage(content=(
+                    "When you execute a database query and return results, analyze whether a visual chart or graph "
+                    "would help the user understand the data better. If you determine that visualization would be "
+                    "helpful (e.g., for trends, comparisons, distributions, or when the user explicitly requests it), "
+                    "include the exact marker [VISUALIZE=TRUE] somewhere in your response. "
+                    "Only include this marker when visualization adds value to understanding the data."
+                ))
+                messages.append(viz_instruction)
+                
                 # Inject resources context on first message
                 resources_context = await self._format_resources_context()
                 if resources_context:
@@ -418,14 +428,41 @@ class MCPAgent:
                     
                     # NEW: Check for visualization need and invoke GraphVisualizationTool
                     try:
-                        self.logger.info("Analyzing query result for graph visualization potential")
-                        from .graph_visualization import analyze_and_generate_graph
+                        # Determine if visualization is needed based on agent's response
+                        should_visualize = False
                         
-                        # Get chart metadata (includes visualization_needed flag)
-                        chart_metadata = await analyze_and_generate_graph(
-                            query_result=query_result,
-                            llm=self.llm
-                        )
+                        # Check agent's response for explicit visualization marker
+                        if ai_messages:
+                            last_ai_response = ai_messages[-1].content or ""
+                            
+                            # Look for explicit [VISUALIZE=TRUE] marker from agent
+                            if "[VISUALIZE=TRUE]" in last_ai_response:
+                                self.logger.info("Agent explicitly indicated visualization is needed with [VISUALIZE=TRUE] marker")
+                                should_visualize = True
+                            # Backward compatibility: Also check for explicit user request
+                            elif message:
+                                message_lower = message.lower()
+                                explicit_viz_keywords = ['show me a chart', 'show me a graph', 'visualize', 
+                                                        'plot', 'create a graph', 'create a chart', 
+                                                        'display chart', 'display graph']
+                                if any(keyword in message_lower for keyword in explicit_viz_keywords):
+                                    self.logger.info("User explicitly requested visualization")
+                                    should_visualize = True
+                        
+                        # Only proceed with visualization if needed
+                        if should_visualize:
+                            self.logger.info("Visualization determined to be needed - analyzing query result")
+                            from .graph_visualization import analyze_and_generate_graph
+                            
+                            # Get chart metadata with should_visualize flag
+                            chart_metadata = await analyze_and_generate_graph(
+                                query_result=query_result,
+                                should_visualize=should_visualize,
+                                llm=self.llm
+                            )
+                        else:
+                            self.logger.info("Visualization not needed for this query result")
+                            chart_metadata = None
                         
                         # Check if visualization is needed (deterministic flag)
                         if chart_metadata and chart_metadata.get("visualization_needed"):

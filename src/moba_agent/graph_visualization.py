@@ -214,11 +214,11 @@ Requirements:
     return prompt.strip()
 
 
-async def _get_chart_recommendation(prompt: str, llm) -> Dict[str, Any]:
+async def _get_chart_recommendation(prompt: str, should_visualize: bool, llm) -> Dict[str, Any]:
     """
     Get chart recommendation from LLM.
     
-    Modified to return visualization_needed flag for deterministic triggering.
+    Modified to return visualization_needed flag based on agent's decision.
     Note: Direct LLM invocation removed - now handled by GraphVisualizationTool.
     """
     logger = logging.getLogger(__name__)
@@ -226,9 +226,9 @@ async def _get_chart_recommendation(prompt: str, llm) -> Dict[str, Any]:
     # This function now returns metadata for the tool to process
     # The actual LLM call happens in GraphVisualizationTool
     return {
-        "visualization_needed": True,  # Deterministic flag
+        "visualization_needed": should_visualize,  # Use agent's decision
         "chart_type": "pending",  # Will be determined by tool
-        "reasoning": "Visualization analysis required",
+        "reasoning": "Visualization analysis based on user intent and data context",
         "prompt": prompt,  # Pass prompt for tool to use
         "query_results": None  # Will be populated by caller
     }
@@ -320,6 +320,7 @@ def _get_fallback_recommendation(data_analysis: Dict) -> Dict[str, Any]:
 @log_performance_metrics
 async def analyze_and_generate_graph(
     query_result: Dict[str, Any],
+    should_visualize: bool = None,
     llm=None
 ) -> Optional[Dict[str, Any]]:
     """
@@ -336,6 +337,11 @@ async def analyze_and_generate_graph(
     logger = logging.getLogger(__name__)
     
     viz_logger.log_analysis_start(query_result)
+    
+    # If should_visualize is explicitly False, skip visualization
+    if should_visualize is False:
+        logger.info("Visualization explicitly not needed (should_visualize=False)")
+        return None
     
     # Step 1: Extract and validate data
     rows = query_result.get("rows", [])
@@ -363,7 +369,9 @@ async def analyze_and_generate_graph(
     
     # Return metadata for tool-based processing
     # The actual LLM call will happen in GraphVisualizationTool
-    chart_metadata = await _get_chart_recommendation(chart_prompt, llm)
+    # Use should_visualize if provided, otherwise default to True for backward compatibility
+    viz_needed = should_visualize if should_visualize is not None else True
+    chart_metadata = await _get_chart_recommendation(chart_prompt, viz_needed, llm)
     chart_metadata["query_results"] = query_result
     chart_metadata["data_analysis"] = data_analysis
     

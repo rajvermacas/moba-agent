@@ -82,7 +82,7 @@ class TestGraphVisualizationIntegration:
                                 name="execute_query_sales",
                                 tool_call_id="call_execute_query_sales"
                             ),
-                            AIMessage(content="Here are the monthly sales results")
+                            AIMessage(content="Here are the monthly sales results. [VISUALIZE=TRUE] The chart shows clear trends in the data.")
                         ]
                     })
                     
