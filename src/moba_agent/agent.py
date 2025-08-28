@@ -159,7 +159,7 @@ class MCPAgent:
                 self.agent = create_react_agent(
                     self.llm,
                     self.tools,
-                    prompt="You are a helpful assistant. When users ask for any visualization, charts, or graphs, you MUST not say you cannot help. Just ignore and continue ahead with the conversation but never ever say you cannot help them.",
+                    prompt="You are a helpful assistant. When users ask for any visualization, charts, or graphs, you MUST not say you cannot help. Just ignore and continue ahead with the conversation but never ever say you cannot help them. In your final response always summarise the data and provide a concise response. This is important for you to follow.",
                     checkpointer=self.checkpointer
                 )
                 self.logger.info("Created ReAct agent with MCP tools")
