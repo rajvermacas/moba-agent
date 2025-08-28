@@ -242,13 +242,12 @@ class TestGraphVisualizationIntegration:
                 "date_columns": [],
                 "unique_counts": {}
             }):
-                result = await analyze_and_generate_graph(query_result, llm=None)
+                result = await analyze_and_generate_graph(query_result)
                 
-                # Should return metadata with visualization_needed flag
-                assert result is not None
-                assert result["visualization_needed"] == True
-                assert "prompt" in result
-                assert result["query_results"] == query_result
+                # With structured output, the function now returns graph data directly
+                # or None if visualization is not suitable
+                # The test data has numeric columns so it should return graph data
+                assert result is not None  # Should generate a fallback visualization
     
     @pytest.mark.asyncio
     async def test_no_langchain_tool_selection(self, mock_config):

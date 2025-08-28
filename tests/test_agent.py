@@ -403,7 +403,7 @@ class TestMCPAgent:
         assert len(chunks) == 2
         assert len(streamed_messages) == 2
         assert isinstance(streamed_messages[0], SystemMessage)
-        assert "Available MCP Resources:" in streamed_messages[0].content
+        assert "Available MCP Resources" in streamed_messages[0].content
         assert isinstance(streamed_messages[1], HumanMessage)
         assert streamed_messages[1].content == "Test message"
         assert "stream_thread" in agent._thread_resources_injected

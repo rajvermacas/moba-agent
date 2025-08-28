@@ -20,6 +20,7 @@ from .config import Config
 from .resources import ResourceHandler
 from .tools import ToolHandler
 from .graph_visualization_tool import GraphVisualizationTool
+from .schemas import StructuredAgentResponse, ChartConfig, QueryMetadata
 
 
 class MCPAgent:
@@ -108,13 +109,23 @@ class MCPAgent:
             raise
     
     def _initialize_llm(self):
-        """Initialize Gemini LLM"""
-        self.logger.debug("Initializing Gemini LLM")
+        """Initialize Gemini LLM with structured output"""
+        self.logger.debug("Initializing Gemini LLM with structured output")
         
         try:
             gemini_config = self.config.get_gemini_config()
-            self.llm = ChatGoogleGenerativeAI(**gemini_config)
+            base_llm = ChatGoogleGenerativeAI(**gemini_config)
+            
+            # Configure structured output for visualization responses
+            self.llm_structured = base_llm.with_structured_output(
+                StructuredAgentResponse
+            )
+            
+            # Keep base LLM for agent use (tools need unstructured)
+            self.llm = base_llm
+            
             self.logger.info(f"Gemini LLM initialized with model: {self.config.agent_model}")
+            self.logger.info("Structured output configured for visualization responses")
             
         except Exception as e:
             self.logger.error(f"Failed to initialize Gemini LLM: {e}")
@@ -305,26 +316,6 @@ class MCPAgent:
     # Message Preparation Methods
     # ============================================================================
     
-    def _create_visualization_instruction(self) -> SystemMessage:
-        """
-        Create system instruction for visualization marker and configuration.
-        
-        Returns:
-            SystemMessage with visualization instructions
-        """
-        self.logger.debug("Creating visualization instruction message")
-        
-        return SystemMessage(content=(
-            "When you execute a database query and return results, analyze whether a visual chart or graph "
-            "would help the user understand the data better. If you determine that visualization would be "
-            "helpful (e.g., for trends, comparisons, distributions, or when the user explicitly requests it), "
-            "include the exact marker [VISUALIZE=TRUE] somewhere in your response. "
-            "When you include [VISUALIZE=TRUE], also analyze the data and provide [CHART_CONFIG={...}] with a JSON configuration "
-            "specifying: chart_type (bar, line, pie, scatter, heatmap, etc.), x_axis (column name), y_axis (column name), "
-            "title (descriptive title), and optionally color_field (for grouping). "
-            "Example: [VISUALIZE=TRUE] [CHART_CONFIG={\"chart_type\":\"line\",\"x_axis\":\"date\",\"y_axis\":\"sales\",\"title\":\"Monthly Sales Trend\",\"color_field\":\"region\"}]. "
-            "Choose chart_type based on data: line for time series, bar for comparisons, pie for proportions, scatter for correlations."
-        ))
     
     async def _prepare_messages_for_thread(self, message: str, thread_id: str) -> List[BaseMessage]:
         """
@@ -342,9 +333,8 @@ class MCPAgent:
         
         # Check if this is the first message for this thread
         if thread_id not in self._thread_resources_injected:
-            # Add visualization instruction
-            viz_instruction = self._create_visualization_instruction()
-            messages.append(viz_instruction)
+            # Note: Visualization decisions are now handled via structured output
+            # No need for text-based marker instructions anymore
             
             # Inject resources context on first message
             resources_context = await self._format_resources_context()
@@ -494,189 +484,143 @@ class MCPAgent:
     # Visualization Methods
     # ============================================================================
     
-    def _extract_chart_config_from_response(self, response_text: str) -> Optional[Dict]:
-        """
-        Extract chart configuration from agent response text.
-        
-        Args:
-            response_text: Agent's response text
-            
-        Returns:
-            Chart configuration dict if found, None otherwise
-        """
-        config_match = re.search(r'\[CHART_CONFIG=(.*?)\]', response_text)
-        if config_match:
-            try:
-                chart_config = json.loads(config_match.group(1))
-                self.logger.info(f"Extracted chart configuration: {chart_config}")
-                return chart_config
-            except json.JSONDecodeError as e:
-                self.logger.warning(f"Failed to parse CHART_CONFIG JSON: {e}")
-        
-        return None
-    
-    def _check_explicit_visualization_request(self, message: str) -> bool:
-        """
-        Check if user explicitly requested visualization.
-        
-        Args:
-            message: User's message
-            
-        Returns:
-            True if explicit visualization request found
-        """
-        if not message:
-            return False
-        
-        message_lower = message.lower()
-        explicit_viz_keywords = [
-            'show me a chart', 'show me a graph', 'visualize', 
-            'plot', 'create a graph', 'create a chart', 
-            'display chart', 'display graph'
-        ]
-        
-        if any(keyword in message_lower for keyword in explicit_viz_keywords):
-            self.logger.info("User explicitly requested visualization")
-            return True
-        
-        return False
-    
-    def _should_visualize(self, ai_messages: List[AIMessage], user_message: str) -> Tuple[bool, Optional[Dict]]:
-        """
-        Determine if visualization is needed and extract chart config.
-        
-        Args:
-            ai_messages: List of AI response messages
-            user_message: Original user message
-            
-        Returns:
-            Tuple of (should_visualize, chart_config)
-        """
-        should_visualize = False
-        chart_config = None
-        
-        # Check agent's response for explicit visualization marker
-        if ai_messages:
-            last_ai_response = ai_messages[-1].content or ""
-            
-            # Look for explicit [VISUALIZE=TRUE] marker
-            if "[VISUALIZE=TRUE]" in last_ai_response:
-                self.logger.info("Agent indicated visualization needed with [VISUALIZE=TRUE] marker")
-                should_visualize = True
-                chart_config = self._extract_chart_config_from_response(last_ai_response)
-            
-            # Backward compatibility: check for explicit user request
-            elif self._check_explicit_visualization_request(user_message):
-                should_visualize = True
-        
-        return should_visualize, chart_config
-    
-    async def _invoke_graph_visualization_tool(
-        self, 
-        query_result: Dict, 
-        all_messages: List[Any],
-        thread_id: str,
-        chart_config: Optional[Dict]
-    ) -> Optional[Dict]:
-        """
-        Invoke the GraphVisualizationTool to generate visualization.
-        
-        Args:
-            query_result: Database query result
-            all_messages: All messages from agent response
-            thread_id: Thread identifier
-            chart_config: Chart configuration if available
-            
-        Returns:
-            Graph data dict if successful, None otherwise
-        """
-        if not self.graph_viz_tool:
-            self.logger.warning("GraphVisualizationTool not initialized")
-            return None
-        
-        try:
-            viz_result = await self.graph_viz_tool.arun(
-                query_results=query_result,
-                context=all_messages,
-                thread_id=thread_id,
-                chart_config=chart_config
-            )
-            
-            if viz_result["status"] == "success":
-                self.logger.info(f"Generated {viz_result['chart_type']} chart via tool")
-                return viz_result["graph_data"]
-            else:
-                self.logger.warning(f"Graph visualization tool returned error: {viz_result.get('error')}")
-                return None
-                
-        except Exception as e:
-            self.logger.error(f"Failed to invoke graph visualization tool: {e}", exc_info=True)
-            return None
-    
-    async def _handle_visualization(
+    async def _handle_visualization_with_config(
         self,
         query_result: Dict,
-        ai_messages: List[AIMessage],
+        chart_config: Dict,
         all_messages: List[Any],
-        user_message: str,
         thread_id: str
     ) -> Optional[Dict]:
         """
-        Handle visualization logic for query results.
+        Handle visualization with a specific chart configuration.
+        
+        This simplified method uses the structured chart config directly
+        without needing to parse text or make additional LLM calls.
         
         Args:
             query_result: Database query result
-            ai_messages: List of AI response messages
+            chart_config: Chart configuration from structured response
             all_messages: All messages from response
-            user_message: Original user message
             thread_id: Thread identifier
             
         Returns:
             Graph data if visualization was generated, None otherwise
         """
         try:
-            # Determine if visualization is needed
-            should_visualize, chart_config = self._should_visualize(ai_messages, user_message)
+            self.logger.info(f"Generating {chart_config.get('chart_type')} visualization")
             
-            if not should_visualize:
-                self.logger.info("Visualization not needed for this query result")
-                return None
+            # Try using GraphVisualizationTool first if available
+            if self.graph_viz_tool:
+                try:
+                    viz_result = await self.graph_viz_tool.arun(
+                        query_results=query_result,
+                        context=all_messages,
+                        thread_id=thread_id,
+                        chart_config=chart_config
+                    )
+                    
+                    if viz_result["status"] == "success":
+                        self.logger.info(f"Generated {viz_result['chart_type']} chart via tool")
+                        return viz_result["graph_data"]
+                    else:
+                        self.logger.warning(f"Graph visualization tool returned error: {viz_result.get('error')}")
+                        
+                except Exception as e:
+                    self.logger.error(f"Failed to invoke graph visualization tool: {e}", exc_info=True)
             
-            self.logger.info("Visualization determined to be needed - analyzing query result")
-            
-            # Import visualization module
+            # Fallback to direct graph generation
             from .graph_visualization import analyze_and_generate_graph
             
-            # Get chart metadata
-            chart_metadata = await analyze_and_generate_graph(
-                query_result=query_result,
-                should_visualize=should_visualize,
-                llm=self.llm,
+            graph_data = await analyze_and_generate_graph(
+                query_result,
                 chart_config=chart_config
             )
             
-            # Check if visualization is actually needed (from analysis)
-            if not chart_metadata or not chart_metadata.get("visualization_needed"):
-                self.logger.info("Query result not suitable for visualization")
+            if graph_data:
+                self.logger.info(f"Generated visualization successfully")
+                return graph_data
+            else:
+                self.logger.warning("No graph data generated")
                 return None
+                
+        except Exception as e:
+            self.logger.error(f"Visualization generation failed: {e}", exc_info=True)
+            return None
+    
+    async def _get_structured_response(
+        self,
+        messages: List[BaseMessage],
+        query_result: Optional[Dict] = None
+    ) -> StructuredAgentResponse:
+        """
+        Get a structured response from the LLM for visualization decisions.
+        
+        This method invokes the LLM with structured output to get clear decisions
+        about visualization needs and chart configurations.
+        
+        Args:
+            messages: Conversation history
+            query_result: Database query result if available
             
-            self.logger.info("Visualization needed flag is True - invoking GraphVisualizationTool")
+        Returns:
+            StructuredAgentResponse with visualization decisions
+        """
+        try:
+            # Build a focused prompt for structured response
+            system_prompt = """
+            Analyze the conversation and any database query results to determine:
+            1. Whether visualization is needed (should_visualize)
+            2. If yes, what chart configuration to use (chart_config)
+            3. Provide reasoning for your decisions
             
-            # Use config from agent or from analysis
-            final_config = chart_config or chart_metadata.get("chart_config")
+            Consider visualization when:
+            - Query results contain aggregated data
+            - User explicitly asks for charts/graphs/visualization
+            - Data shows trends, comparisons, or distributions
+            - Results would be clearer in visual format
+            - Try to always provide visualization unless the data is just not compatible
             
-            # Invoke visualization tool
-            return await self._invoke_graph_visualization_tool(
-                query_result,
-                all_messages,
-                thread_id,
-                final_config
-            )
+            Choose appropriate chart types based on data characteristics:
+            - Bar/Column: Categorical comparisons
+            - Line: Trends over time
+            - Pie: Part-to-whole relationships
+            - Scatter: Correlations
+            - Heatmap: Matrix data
+            - Table: Detailed records
+            """
+            
+            # Add system message for context
+            enhanced_messages = [SystemMessage(content=system_prompt)] + messages
+            
+            # If we have query results, add them to context
+            if query_result:
+                result_summary = f"\nDatabase Query Result Summary:\n"
+                result_summary += f"- Rows returned: {len(query_result.get('data', []))}\n"
+                if query_result.get('data'):
+                    result_summary += f"- Columns: {list(query_result['data'][0].keys())}\n"
+                    result_summary += f"- Sample data: {query_result['data'][:3]}\n"
+                enhanced_messages.append(SystemMessage(content=result_summary))
+            
+            # Get structured response from LLM
+            self.logger.debug("Invoking LLM for structured visualization response")
+            structured_response = await self.llm_structured.ainvoke(enhanced_messages)
+            
+            self.logger.info(f"Structured response - Visualize: {structured_response.should_visualize}")
+            if structured_response.should_visualize and structured_response.chart_config:
+                self.logger.info(f"Chart type selected: {structured_response.chart_config.chart_type}")
+            
+            return structured_response
             
         except Exception as e:
-            self.logger.error(f"Graph generation failed: {e}", exc_info=True)
-            # Continue without graph - don't fail the entire request
-            return None
+            self.logger.error(f"Failed to get structured response: {e}", exc_info=True)
+            # Return default response on error
+            return StructuredAgentResponse(
+                content="",
+                should_visualize=False,
+                chart_config=None,
+                query_metadata=None,
+                reasoning="Error getting structured response"
+            )
     
     # ============================================================================
     # Main Public Method
@@ -735,16 +679,33 @@ class MCPAgent:
             if query_result:
                 result["query_result"] = query_result
                 
-                # Step 6: Handle visualization if query result exists
-                graph_data = await self._handle_visualization(
-                    query_result,
-                    ai_messages,
-                    all_messages,
-                    message,
-                    thread_id
+                # Step 6: Get structured response for visualization decisions
+                structured_resp = await self._get_structured_response(
+                    messages=all_messages,
+                    query_result=query_result
                 )
-                if graph_data:
-                    result["graph"] = graph_data
+                
+                # Step 7: Handle visualization if structured response indicates need
+                if structured_resp.should_visualize and structured_resp.chart_config:
+                    self.logger.info(
+                        f"Structured response indicates visualization needed: "
+                        f"{structured_resp.chart_config.chart_type}"
+                    )
+                    
+                    # Convert Pydantic model to dict for compatibility
+                    chart_config_dict = structured_resp.chart_config.model_dump()
+                    
+                    # Generate visualization
+                    graph_data = await self._handle_visualization_with_config(
+                        query_result,
+                        chart_config_dict,
+                        all_messages,
+                        thread_id
+                    )
+                    if graph_data:
+                        result["graph"] = graph_data
+                else:
+                    self.logger.info("Structured response: No visualization needed")
             
             self.logger.debug(
                 f"Agent response with query tracking completed. "

@@ -152,86 +152,6 @@ def safe_graph_generation(func):
 # LLM Integration Functions
 # ============================================================================
 
-def _build_chart_analysis_prompt(data_analysis: Dict, original_query: str, sample_rows: List[Dict]) -> str:
-    """
-    Build prompt for LLM to analyze data and recommend chart type.
-    Includes actual data samples for better analysis.
-    """
-    
-    # Format sample data for display
-    sample_data_str = "\n".join([
-        json.dumps(row, indent=2) for row in sample_rows[:5]
-    ])
-    
-    prompt = f"""
-Analyze this database query result to recommend the best chart visualization:
-
-ORIGINAL QUERY: {original_query}
-
-DATA CHARACTERISTICS:
-- Total rows: {data_analysis['row_count']}
-- Numeric columns: {data_analysis['numeric_columns']}
-- Categorical columns: {data_analysis['categorical_columns']}
-- Date columns: {data_analysis['date_columns']}
-- Unique value counts: {data_analysis['unique_counts']}
-
-VALUE RANGES:
-{json.dumps(data_analysis.get('value_ranges', {}), indent=2)}
-
-SAMPLE DATA (first 5 rows):
-{sample_data_str}
-
-TASK: Recommend the single best chart type and configuration based on the actual data structure and values shown above.
-
-AVAILABLE CHART TYPES:
-- bar: Compare categorical data values
-- line: Show trends over time or ordered categories
-- pie: Show parts of a whole (max 8 categories)
-- scatter: Show relationship between two numeric variables
-- area: Show cumulative values or trends with filled area
-- heatmap: Show correlation or intensity across two dimensions
-
-RESPONSE FORMAT (JSON only):
-{{
-  "chart_type": "bar|line|pie|scatter|area|heatmap",
-  "reasoning": "Why this chart type is optimal for this data",
-  "config": {{
-    "x_axis": "column_name",
-    "y_axis": "column_name",
-    "title": "Descriptive chart title",
-    "color_field": "column_name_or_null"
-  }}
-}}
-
-Requirements:
-- Choose the most informative visualization for the data
-- Ensure x_axis and y_axis reference actual column names from the sample data
-- Create a descriptive title related to the original query
-- For pie charts, use categorical column with <8 unique values
-- For time series, prefer line or area charts
-- Consider the business context from the original query and actual data values
-"""
-    return prompt.strip()
-
-
-async def _get_chart_recommendation(prompt: str, should_visualize: bool, llm) -> Dict[str, Any]:
-    """
-    Get chart recommendation from LLM.
-    
-    Modified to return visualization_needed flag based on agent's decision.
-    Note: Direct LLM invocation removed - now handled by GraphVisualizationTool.
-    """
-    logger = logging.getLogger(__name__)
-    
-    # This function now returns metadata for the tool to process
-    # The actual LLM call happens in GraphVisualizationTool
-    return {
-        "visualization_needed": should_visualize,  # Use agent's decision
-        "chart_type": "pending",  # Will be determined by tool
-        "reasoning": "Visualization analysis based on user intent and data context",
-        "prompt": prompt,  # Pass prompt for tool to use
-        "query_results": None  # Will be populated by caller
-    }
 
 
 def _get_fallback_recommendation(data_analysis: Dict) -> Dict[str, Any]:
@@ -320,16 +240,18 @@ def _get_fallback_recommendation(data_analysis: Dict) -> Dict[str, Any]:
 @log_performance_metrics
 async def analyze_and_generate_graph(
     query_result: Dict[str, Any],
-    should_visualize: bool = None,
-    llm=None,
     chart_config: Dict[str, Any] = None
 ) -> Optional[Dict[str, Any]]:
     """
-    Analyze query result and generate graph data if visualization is beneficial.
+    Analyze query result and generate graph data with structured configuration.
+    
+    This simplified version uses the structured chart configuration directly
+    from the agent's structured response, eliminating the need for LLM prompts
+    and text parsing.
     
     Args:
         query_result: Raw query result from execute_query_* tool
-        llm: LLM instance for chart type recommendation
+        chart_config: Structured chart configuration from agent's response
         
     Returns:
         Graph data dict or None if not suitable for visualization
@@ -338,11 +260,6 @@ async def analyze_and_generate_graph(
     logger = logging.getLogger(__name__)
     
     viz_logger.log_analysis_start(query_result)
-    
-    # If should_visualize is explicitly False, skip visualization
-    if should_visualize is False:
-        logger.info("Visualization explicitly not needed (should_visualize=False)")
-        return None
     
     # Step 1: Extract and validate data
     rows = query_result.get("rows", [])
@@ -354,41 +271,26 @@ async def analyze_and_generate_graph(
     
     viz_logger.log_suitability_check(True)
     
-    # Step 2: Analyze data characteristics
+    # Step 2: Analyze data characteristics (for fallback if needed)
     data_analysis = analyze_data_characteristics(rows, columns)
     viz_logger.log_data_analysis(data_analysis)
     
-    # Step 3: Get chart recommendation
-    sample_rows = rows[:5] if len(rows) >= 5 else rows
-    chart_prompt = _build_chart_analysis_prompt(
-        data_analysis,
-        query_result.get("query", ""),
-        sample_rows
-    )
-    
-    viz_logger.log_llm_prompt(chart_prompt)
-    
-    # Return metadata for tool-based processing
-    # The actual LLM call will happen in GraphVisualizationTool
-    # Use should_visualize if provided, otherwise default to True for backward compatibility
-    viz_needed = should_visualize if should_visualize is not None else True
-    chart_metadata = await _get_chart_recommendation(chart_prompt, viz_needed, llm)
-    chart_metadata["query_results"] = query_result
-    chart_metadata["data_analysis"] = data_analysis
-    
-    # Include chart configuration if provided by agent
-    if chart_config:
-        chart_metadata["chart_config"] = chart_config
-    
-    # Check if visualization is needed
-    if chart_metadata.get("visualization_needed"):
-        logger.info("Visualization needed flag is True - deferring to GraphVisualizationTool")
-        # Return metadata for agent to process with GraphVisualizationTool
-        return chart_metadata
-    
-    # Fallback path (shouldn't normally reach here with new architecture)
-    viz_logger.log_fallback("Using fallback recommendation")
-    chart_recommendation = _get_fallback_recommendation(data_analysis)
+    # Step 3: Use provided config or generate fallback
+    if chart_config and "chart_type" in chart_config:
+        logger.info(f"Using structured chart config: {chart_config.get('chart_type')}")
+        chart_recommendation = {
+            "chart_type": chart_config.get("chart_type"),
+            "config": {
+                "x_axis": chart_config.get("x_axis"),
+                "y_axis": chart_config.get("y_axis"),
+                "title": chart_config.get("title", "Data Visualization"),
+                "color_field": chart_config.get("group_by") or chart_config.get("filters", {}).get("color_field")
+            }
+        }
+    else:
+        # Fallback to heuristic-based recommendation
+        logger.info("No structured config provided, using fallback recommendation")
+        chart_recommendation = _get_fallback_recommendation(data_analysis)
     
     # Step 4: Transform data to chart format
     viz_logger.log_transformation_start(
