@@ -48,7 +48,7 @@ class TestGraphVisualizationTool:
         
         assert tool.agent == mock_agent
         assert tool.llm == mock_agent.llm
-        assert tool.memory == []
+        assert not hasattr(tool, 'memory')  # No local memory storage
         assert tool.config == {}
     
     def test_add_to_memory(self, tool):
@@ -59,29 +59,26 @@ class TestGraphVisualizationTool:
             "metadata": {"type": "test"}
         }
         
+        # add_to_memory now just logs, doesn't store locally
         tool.add_to_memory(entry)
         
-        assert len(tool.memory) == 1
-        assert tool.memory[0] == entry
+        # No local memory storage to verify
+        assert not hasattr(tool, 'memory')
     
     @pytest.mark.asyncio
     async def test_arun_success(self, tool, mock_query_results, mock_agent):
-        """Test successful graph generation"""
-        # Mock LLM response
-        mock_llm_response = AIMessage(content=json.dumps({
+        """Test successful graph generation with provided config"""
+        # Provide chart configuration directly (no LLM call needed)
+        chart_config = {
             "chart_type": "bar",
-            "reasoning": "Bar chart is suitable for categorical comparison",
-            "config": {
-                "x_axis": "category",
-                "y_axis": "value",
-                "title": "Sales by Category",
-                "color_field": None
-            }
-        }))
-        mock_agent.llm.ainvoke.return_value = mock_llm_response
+            "x_axis": "category",
+            "y_axis": "value",
+            "title": "Sales by Category",
+            "color_field": None
+        }
         
-        # Run the tool
-        result = await tool.arun(mock_query_results)
+        # Run the tool with thread_id and chart_config
+        result = await tool.arun(mock_query_results, thread_id="test_thread", chart_config=chart_config)
         
         # Verify result structure
         assert result["status"] == "success"
@@ -89,32 +86,28 @@ class TestGraphVisualizationTool:
         assert "graph_data" in result
         assert "explanation" in result
         assert result["chart_type"] == "bar"
+        assert "metadata" in result
         
-        # Verify memory was updated
-        assert len(tool.memory) == 2  # Pre and post execution
-        assert tool.memory[0]["role"] == "assistant"
-        assert tool.memory[0]["metadata"]["tool_invoke"] == "graph_visualization"
-        assert tool.memory[1]["role"] == "tool"
-        assert tool.memory[1]["metadata"]["type"] == "visualization"
+        # Verify metadata structure for thread persistence
+        assert result["metadata"]["type"] == "visualization"
+        assert result["metadata"]["thread_id"] == "test_thread"
+        assert "graph_ref" in result["metadata"]
+        assert "timestamp" in result["metadata"]
     
     @pytest.mark.asyncio
     async def test_arun_with_string_input(self, tool, mock_query_results, mock_agent):
         """Test handling of string input for query results"""
-        # Mock LLM response
-        mock_llm_response = AIMessage(content=json.dumps({
+        # Provide chart configuration
+        chart_config = {
             "chart_type": "line",
-            "reasoning": "Line chart for time series",
-            "config": {
-                "x_axis": "date",
-                "y_axis": "value",
-                "title": "Values over Time",
-                "color_field": None
-            }
-        }))
-        mock_agent.llm.ainvoke.return_value = mock_llm_response
+            "x_axis": "date",
+            "y_axis": "value",
+            "title": "Values over Time",
+            "color_field": None
+        }
         
-        # Pass query results as string
-        result = await tool.arun(json.dumps(mock_query_results))
+        # Pass query results as string with thread_id and config
+        result = await tool.arun(json.dumps(mock_query_results), thread_id="test_thread", chart_config=chart_config)
         
         assert result["status"] == "success"
         assert result["chart_type"] == "line"
@@ -122,27 +115,22 @@ class TestGraphVisualizationTool:
     @pytest.mark.asyncio
     async def test_arun_error_handling(self, tool, mock_agent):
         """Test graceful error handling"""
-        # Make LLM raise an exception
-        mock_agent.llm.ainvoke.side_effect = Exception("LLM error")
-        
-        result = await tool.arun({"rows": [], "columns": []})
+        # Pass invalid data that will cause an error
+        result = await tool.arun({"rows": [], "columns": []}, thread_id="test_thread", chart_config=None)
         
         # Verify error response
         assert result["status"] == "error"
         assert "Error occurred while creating graph" in result["explanation"]
         assert "error" in result
+        assert "metadata" in result
         
-        # Verify error was logged to memory
-        assert len(tool.memory) == 2
-        assert tool.memory[1]["metadata"]["type"] == "viz_error"
+        # Verify error metadata for thread persistence
+        assert result["metadata"]["type"] == "viz_error"
+        assert result["metadata"]["thread_id"] == "test_thread"
     
     @pytest.mark.asyncio
-    async def test_arun_invalid_json_response(self, tool, mock_query_results, mock_agent):
-        """Test handling of invalid JSON in LLM response"""
-        # Mock LLM response with invalid JSON
-        mock_llm_response = AIMessage(content="This is not valid JSON")
-        mock_agent.llm.ainvoke.return_value = mock_llm_response
-        
+    async def test_arun_fallback_without_config(self, tool, mock_query_results, mock_agent):
+        """Test fallback to heuristics when no config provided"""
         # Mock fallback recommendation to work
         with patch('src.moba_agent.graph_visualization._get_fallback_recommendation') as mock_fallback:
             mock_fallback.return_value = {
@@ -155,7 +143,8 @@ class TestGraphVisualizationTool:
                 }
             }
             
-            result = await tool.arun(mock_query_results)
+            # Run without chart_config to trigger fallback
+            result = await tool.arun(mock_query_results, thread_id="test_thread", chart_config=None)
             
             # Should still succeed with fallback
             assert result["status"] == "success"
@@ -164,58 +153,53 @@ class TestGraphVisualizationTool:
     @pytest.mark.asyncio
     async def test_arun_with_context(self, tool, mock_query_results, mock_agent):
         """Test passing context to the tool"""
-        mock_llm_response = AIMessage(content=json.dumps({
+        chart_config = {
             "chart_type": "pie",
-            "reasoning": "Pie chart for distribution",
-            "config": {
-                "x_axis": "category",
-                "y_axis": "value",
-                "title": "Distribution",
-                "color_field": None
-            }
-        }))
-        mock_agent.llm.ainvoke.return_value = mock_llm_response
+            "x_axis": "category",
+            "y_axis": "value",
+            "title": "Distribution",
+            "color_field": None
+        }
         
         context = [
             {"role": "user", "content": "Show me a pie chart"},
             {"role": "assistant", "content": "Creating visualization"}
         ]
         
-        result = await tool.arun(mock_query_results, context=context)
+        result = await tool.arun(mock_query_results, context=context, thread_id="test_thread", chart_config=chart_config)
         
         assert result["status"] == "success"
         assert result["chart_type"] == "pie"
     
-    def test_memory_entry_structure(self, tool):
-        """Test memory entry structure follows expected format"""
-        # Pre-invocation marker
-        pre_entry = {
-            "role": "assistant",
-            "content": "Generating visualization...",
-            "metadata": {
-                "tool_invoke": "graph_visualization",
-                "timestamp": datetime.now().isoformat()
-            }
+    @pytest.mark.asyncio
+    async def test_metadata_structure_for_thread_persistence(self, tool, mock_query_results, mock_agent):
+        """Test metadata structure for thread persistence"""
+        # Provide chart config
+        chart_config = {
+            "chart_type": "bar",
+            "x_axis": "category",
+            "y_axis": "value",
+            "title": "Test Chart",
+            "color_field": None
         }
-        tool.add_to_memory(pre_entry)
         
-        # Post-success entry
-        post_entry = {
-            "role": "tool",
-            "content": "Graph shows 5 entities with 8 relationships...",
-            "metadata": {
-                "type": "visualization",
-                "graph_ref": "graph_12345",
-                "status": "success",
-                "timestamp": datetime.now().isoformat()
-            }
-        }
-        tool.add_to_memory(post_entry)
+        result = await tool.arun(mock_query_results, thread_id="test_thread_123", chart_config=chart_config)
         
-        assert len(tool.memory) == 2
-        assert tool.memory[0]["metadata"]["tool_invoke"] == "graph_visualization"
-        assert tool.memory[1]["metadata"]["type"] == "visualization"
-        assert tool.memory[1]["metadata"]["graph_ref"] == "graph_12345"
+        # Verify metadata structure
+        assert result["status"] == "success"
+        assert "metadata" in result
+        
+        metadata = result["metadata"]
+        assert metadata["type"] == "visualization"
+        assert metadata["thread_id"] == "test_thread_123"
+        assert "graph_ref" in metadata
+        assert "chart_type" in metadata
+        assert "timestamp" in metadata
+        assert "pre_execution" in metadata
+        
+        # Verify pre-execution metadata
+        assert metadata["pre_execution"]["tool_invoke"] == "graph_visualization"
+        assert metadata["pre_execution"]["thread_id"] == "test_thread_123"
 
 
 class TestDeterministicTriggering:

@@ -321,7 +321,8 @@ def _get_fallback_recommendation(data_analysis: Dict) -> Dict[str, Any]:
 async def analyze_and_generate_graph(
     query_result: Dict[str, Any],
     should_visualize: bool = None,
-    llm=None
+    llm=None,
+    chart_config: Dict[str, Any] = None
 ) -> Optional[Dict[str, Any]]:
     """
     Analyze query result and generate graph data if visualization is beneficial.
@@ -374,6 +375,10 @@ async def analyze_and_generate_graph(
     chart_metadata = await _get_chart_recommendation(chart_prompt, viz_needed, llm)
     chart_metadata["query_results"] = query_result
     chart_metadata["data_analysis"] = data_analysis
+    
+    # Include chart configuration if provided by agent
+    if chart_config:
+        chart_metadata["chart_config"] = chart_config
     
     # Check if visualization is needed
     if chart_metadata.get("visualization_needed"):

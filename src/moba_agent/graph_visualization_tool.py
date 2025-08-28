@@ -10,7 +10,7 @@ import json
 import re
 from datetime import datetime
 from typing import Dict, Any, List
-from langchain_core.messages import HumanMessage
+# HumanMessage import no longer needed - removed LLM invocation
 
 
 class GraphVisualizationTool:
@@ -28,7 +28,7 @@ class GraphVisualizationTool:
         """
         self.agent = agent
         self.llm = agent.llm  # Reference, not new instance
-        self.memory = []  # Will be replaced with actual memory implementation
+        # Memory is managed through agent's thread state, not locally
         self.logger = logging.getLogger(__name__)
         self.config = agent.config if hasattr(agent, 'config') else {}
         
@@ -38,41 +38,43 @@ class GraphVisualizationTool:
         """
         Add an entry to the agent's memory.
         
+        Note: In the current implementation, memory entries are added as metadata
+        to the visualization results that are returned to the agent. The agent
+        then incorporates these into the thread's message history automatically.
+        
         Args:
             entry: Memory entry with role, content, and metadata
         """
-        # For now, append to internal memory list
-        # This will be integrated with actual agent memory
-        self.memory.append(entry)
-        self.logger.debug(f"Added memory entry: {entry.get('role')}, type: {entry.get('metadata', {}).get('type')}")
+        # Memory is handled through the return values and metadata
+        # The agent automatically adds tool results to thread state
+        self.logger.debug(f"Memory entry prepared: {entry.get('role')}, type: {entry.get('metadata', {}).get('type')}")
     
-    async def arun(self, query_results: str, context: List = None) -> Dict[str, Any]:
+    async def arun(self, query_results: str, context: List = None, thread_id: str = None, chart_config: Dict[str, Any] = None) -> Dict[str, Any]:
         """
-        Generate graph visualization using agent's LLM instance.
+        Generate graph visualization using provided configuration.
         
         Args:
             query_results: Query results to visualize (string or dict)
             context: Conversation context (list of messages)
+            thread_id: Thread ID for accessing conversation history
+            chart_config: Chart configuration from agent (optional)
             
         Returns:
-            Dict with graph_id, explanation, and status
+            Dict with graph_id, explanation, status, and metadata for memory
         """
         try:
             self.logger.info("Starting graph visualization generation")
             
-            # Pre-execution memory marker
-            self.add_to_memory({
-                "role": "assistant",
-                "content": "Generating visualization...",
-                "metadata": {
-                    "tool_invoke": "graph_visualization",
-                    "timestamp": datetime.now().isoformat()
-                }
-            })
+            # Pre-execution metadata (will be included in return value)
+            pre_execution_meta = {
+                "tool_invoke": "graph_visualization",
+                "timestamp": datetime.now().isoformat(),
+                "thread_id": thread_id
+            }
+            self.logger.debug(f"Starting visualization with metadata: {pre_execution_meta}")
             
             # Import existing functions from graph_visualization module
             from .graph_visualization import (
-                _build_chart_analysis_prompt,
                 analyze_data_characteristics,
                 _get_fallback_recommendation,
                 transform_to_chart_data,
@@ -96,41 +98,39 @@ class GraphVisualizationTool:
             data_analysis = analyze_data_characteristics(rows, columns)
             self.logger.info(f"Data analysis complete: {len(rows)} rows, {len(columns)} columns")
             
-            # Build prompt for chart recommendation
-            sample_rows = rows[:5] if len(rows) >= 5 else rows
-            prompt = _build_chart_analysis_prompt(
-                data_analysis,
-                query_data.get("query", ""),
-                sample_rows
-            )
-            
-            self.logger.debug(f"Generated chart analysis prompt (length: {len(prompt)})")
-            
-            # Use agent's LLM (replaces direct invocation from lines 228-229)
-            self.logger.info("Invoking agent's LLM for chart recommendation")
-            llm_response = await self.llm.ainvoke(
-                [HumanMessage(content=prompt)],
-                config=self.config if isinstance(self.config, dict) else {}
-            )
-            
-            response_text = llm_response.content
-            self.logger.debug(f"LLM response received (length: {len(response_text)})")
-            
-            # Parse LLM response to get chart recommendation
-            json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
-            if not json_match:
-                self.logger.warning("No JSON found in LLM response, using fallback")
-                chart_recommendation = _get_fallback_recommendation(data_analysis)
+            # Use provided chart configuration or generate fallback
+            if chart_config:
+                # Use the configuration provided by the agent
+                self.logger.info(f"Using agent-provided chart configuration: {chart_config}")
+                chart_recommendation = {
+                    "chart_type": chart_config.get("chart_type", "bar"),
+                    "config": {
+                        "x_axis": chart_config.get("x_axis"),
+                        "y_axis": chart_config.get("y_axis"),
+                        "title": chart_config.get("title", "Data Visualization"),
+                        "color_field": chart_config.get("color_field")
+                    },
+                    "reasoning": f"Agent determined {chart_config.get('chart_type', 'bar')} chart is best for this data"
+                }
             else:
-                try:
-                    chart_recommendation = json.loads(json_match.group())
-                    self.logger.info(f"LLM recommended {chart_recommendation['chart_type']} chart")
-                except json.JSONDecodeError as e:
-                    self.logger.warning(f"Failed to parse LLM JSON: {e}, using fallback")
-                    chart_recommendation = _get_fallback_recommendation(data_analysis)
+                # Fallback to heuristics-based recommendation
+                self.logger.info("No chart configuration provided, using heuristics")
+                chart_recommendation = _get_fallback_recommendation(data_analysis)
+                
+                if not chart_recommendation:
+                    # Last resort: basic bar chart
+                    chart_recommendation = {
+                        "chart_type": "bar",
+                        "config": {
+                            "x_axis": columns[0] if columns else "x",
+                            "y_axis": columns[1] if len(columns) > 1 else "y",
+                            "title": "Data Visualization",
+                            "color_field": None
+                        },
+                        "reasoning": "Default bar chart visualization"
+                    }
             
-            if not chart_recommendation:
-                raise ValueError("Could not determine appropriate chart type")
+            self.logger.info(f"Chart type determined: {chart_recommendation['chart_type']}")
             
             # Transform data to chart format
             graph_data = transform_to_chart_data(
@@ -148,18 +148,16 @@ class GraphVisualizationTool:
             import hashlib
             graph_id = f"graph_{hashlib.md5(json.dumps(graph_data).encode()).hexdigest()[:8]}"
             
-            # Post-execution memory update
+            # Post-execution metadata
             explanation = chart_recommendation.get("reasoning", "Graph visualization created")
-            self.add_to_memory({
-                "role": "tool",
-                "content": explanation,
-                "metadata": {
-                    "type": "visualization",
-                    "graph_ref": graph_id,
-                    "chart_type": chart_recommendation["chart_type"],
-                    "timestamp": datetime.now().isoformat()
-                }
-            })
+            visualization_metadata = {
+                "type": "visualization",
+                "graph_ref": graph_id,
+                "chart_type": chart_recommendation["chart_type"],
+                "timestamp": datetime.now().isoformat(),
+                "thread_id": thread_id,
+                "pre_execution": pre_execution_meta
+            }
             
             self.logger.info(f"Graph visualization completed successfully: {graph_id}")
             
@@ -168,25 +166,24 @@ class GraphVisualizationTool:
                 "graph_data": graph_data,
                 "explanation": explanation,
                 "chart_type": chart_recommendation["chart_type"],
-                "status": "success"
+                "status": "success",
+                "metadata": visualization_metadata  # This will be stored in thread state
             }
             
         except Exception as e:
             self.logger.error(f"Visualization failed: {e}", exc_info=True)
             
-            # Add error to memory
-            self.add_to_memory({
-                "role": "tool",
-                "content": "Error occurred while creating graph",
-                "metadata": {
-                    "type": "viz_error",
-                    "error": str(e),
-                    "timestamp": datetime.now().isoformat()
-                }
-            })
+            # Error metadata
+            error_metadata = {
+                "type": "viz_error",
+                "error": str(e),
+                "timestamp": datetime.now().isoformat(),
+                "thread_id": thread_id
+            }
             
             return {
                 "explanation": "Error occurred while creating graph",
                 "error": str(e),
-                "status": "error"
+                "status": "error",
+                "metadata": error_metadata  # This will be stored in thread state
             }

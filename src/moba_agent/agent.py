@@ -325,13 +325,17 @@ class MCPAgent:
             
             # Check if this is the first message for this thread
             if thread_id not in self._thread_resources_injected:
-                # Add system instruction for visualization marker
+                # Add system instruction for visualization marker and configuration
                 viz_instruction = SystemMessage(content=(
                     "When you execute a database query and return results, analyze whether a visual chart or graph "
                     "would help the user understand the data better. If you determine that visualization would be "
                     "helpful (e.g., for trends, comparisons, distributions, or when the user explicitly requests it), "
                     "include the exact marker [VISUALIZE=TRUE] somewhere in your response. "
-                    "Only include this marker when visualization adds value to understanding the data."
+                    "When you include [VISUALIZE=TRUE], also analyze the data and provide [CHART_CONFIG={...}] with a JSON configuration "
+                    "specifying: chart_type (bar, line, pie, scatter, heatmap, etc.), x_axis (column name), y_axis (column name), "
+                    "title (descriptive title), and optionally color_field (for grouping). "
+                    "Example: [VISUALIZE=TRUE] [CHART_CONFIG={\"chart_type\":\"line\",\"x_axis\":\"date\",\"y_axis\":\"sales\",\"title\":\"Monthly Sales Trend\",\"color_field\":\"region\"}]. "
+                    "Choose chart_type based on data: line for time series, bar for comparisons, pie for proportions, scatter for correlations."
                 ))
                 messages.append(viz_instruction)
                 
@@ -430,8 +434,9 @@ class MCPAgent:
                     try:
                         # Determine if visualization is needed based on agent's response
                         should_visualize = False
+                        chart_config = None
                         
-                        # Check agent's response for explicit visualization marker
+                        # Check agent's response for explicit visualization marker and configuration
                         if ai_messages:
                             last_ai_response = ai_messages[-1].content or ""
                             
@@ -439,6 +444,16 @@ class MCPAgent:
                             if "[VISUALIZE=TRUE]" in last_ai_response:
                                 self.logger.info("Agent explicitly indicated visualization is needed with [VISUALIZE=TRUE] marker")
                                 should_visualize = True
+                                
+                                # Extract chart configuration if provided
+                                config_match = re.search(r'\[CHART_CONFIG=(.*?)\]', last_ai_response)
+                                if config_match:
+                                    try:
+                                        chart_config = json.loads(config_match.group(1))
+                                        self.logger.info(f"Extracted chart configuration: {chart_config}")
+                                    except json.JSONDecodeError as e:
+                                        self.logger.warning(f"Failed to parse CHART_CONFIG JSON: {e}")
+                                        chart_config = None
                             # Backward compatibility: Also check for explicit user request
                             elif message:
                                 message_lower = message.lower()
@@ -454,11 +469,12 @@ class MCPAgent:
                             self.logger.info("Visualization determined to be needed - analyzing query result")
                             from .graph_visualization import analyze_and_generate_graph
                             
-                            # Get chart metadata with should_visualize flag
+                            # Get chart metadata with should_visualize flag and configuration
                             chart_metadata = await analyze_and_generate_graph(
                                 query_result=query_result,
                                 should_visualize=should_visualize,
-                                llm=self.llm
+                                llm=self.llm,
+                                chart_config=chart_config
                             )
                         else:
                             self.logger.info("Visualization not needed for this query result")
@@ -472,7 +488,9 @@ class MCPAgent:
                             if self.graph_viz_tool:
                                 viz_result = await self.graph_viz_tool.arun(
                                     query_results=query_result,
-                                    context=all_messages
+                                    context=all_messages,
+                                    thread_id=thread_id,
+                                    chart_config=chart_config or chart_metadata.get("chart_config")
                                 )
                                 
                                 if viz_result["status"] == "success":

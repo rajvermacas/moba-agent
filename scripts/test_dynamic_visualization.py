@@ -101,17 +101,7 @@ async def main():
                     agent.llm = AsyncMock()
                     agent.agent = AsyncMock()
                     
-                    # Mock LLM for GraphVisualizationTool
-                    agent.llm.ainvoke.return_value = AIMessage(content=json.dumps({
-                        "chart_type": "line",
-                        "reasoning": "Line chart for time series",
-                        "config": {
-                            "x_axis": "month",
-                            "y_axis": "sales",
-                            "title": "Monthly Sales",
-                            "color_field": None
-                        }
-                    }))
+                    # No LLM mocking needed - tool now uses provided config
                     
                     await agent.initialize()
                     
@@ -120,7 +110,7 @@ async def main():
                         # (user_message, agent_response, should_visualize)
                         (
                             "Show me a chart of monthly sales",
-                            "Here's a chart showing the monthly sales trends. [VISUALIZE=TRUE] The visualization clearly shows the pattern in your data.",
+                            'Here\'s a chart showing the monthly sales trends. [VISUALIZE=TRUE] [CHART_CONFIG={"chart_type":"line","x_axis":"month","y_axis":"sales","title":"Monthly Sales Trend"}] The visualization clearly shows the pattern in your data.',
                             True  # Explicit visualization request with marker
                         ),
                         (
@@ -130,7 +120,7 @@ async def main():
                         ),
                         (
                             "What are the sales trends?",
-                            "Looking at the sales data, I can see an upward trend from January to February, followed by a slight decline in March. [VISUALIZE=TRUE] A trend chart would help visualize this pattern.",
+                            'Looking at the sales data, I can see an upward trend from January to February, followed by a slight decline in March. [VISUALIZE=TRUE] [CHART_CONFIG={"chart_type":"line","x_axis":"month","y_axis":"sales","title":"Sales Trend Analysis"}] A trend chart would help visualize this pattern.',
                             True  # Agent includes marker for trend visualization
                         ),
                         (
@@ -140,7 +130,7 @@ async def main():
                         ),
                         (
                             "Visualize the monthly performance",
-                            "I'll create a visualization of the monthly performance. [VISUALIZE=TRUE] The graph shows clear patterns in the data.",
+                            'I\'ll create a visualization of the monthly performance. [VISUALIZE=TRUE] [CHART_CONFIG={"chart_type":"bar","x_axis":"month","y_axis":"sales","title":"Monthly Performance"}] The graph shows clear patterns in the data.',
                             True  # Explicit visualization request with marker
                         ),
                         (
@@ -150,7 +140,7 @@ async def main():
                         ),
                         (
                             "Compare sales across months",
-                            "Comparing the sales across months, we can see interesting patterns. [VISUALIZE=TRUE] A comparison chart would help illustrate these differences.",
+                            'Comparing the sales across months, we can see interesting patterns. [VISUALIZE=TRUE] [CHART_CONFIG={"chart_type":"bar","x_axis":"month","y_axis":"sales","title":"Monthly Sales Comparison"}] A comparison chart would help illustrate these differences.',
                             True  # Agent includes marker for comparison
                         ),
                         (
@@ -165,7 +155,7 @@ async def main():
                         ),
                         (
                             "Create a graph",
-                            "Creating a graph for you. [VISUALIZE=TRUE] This will help you understand the data relationships.",
+                            'Creating a graph for you. [VISUALIZE=TRUE] [CHART_CONFIG={"chart_type":"line","x_axis":"month","y_axis":"sales","title":"Data Visualization"}] This will help you understand the data relationships.',
                             True  # Explicit user request with marker
                         )
                     ]

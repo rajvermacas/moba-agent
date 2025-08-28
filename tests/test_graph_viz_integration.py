@@ -82,7 +82,7 @@ class TestGraphVisualizationIntegration:
                                 name="execute_query_sales",
                                 tool_call_id="call_execute_query_sales"
                             ),
-                            AIMessage(content="Here are the monthly sales results. [VISUALIZE=TRUE] The chart shows clear trends in the data.")
+                            AIMessage(content='Here are the monthly sales results. [VISUALIZE=TRUE] [CHART_CONFIG={"chart_type":"line","x_axis":"month","y_axis":"sales","title":"Monthly Sales Trend","color_field":"region"}] The chart shows clear trends in the data.')
                         ]
                     })
                     
@@ -113,8 +113,8 @@ class TestGraphVisualizationIntegration:
                             assert "chart_type" in result["graph"]
                             assert result["graph"]["chart_type"] == "line"
                         
-                        # Verify context maintained throughout
-                        assert agent.llm.ainvoke.called
+                        # Verify no LLM call needed (config provided by agent)
+                        assert not agent.llm.ainvoke.called
     
     @pytest.mark.asyncio
     async def test_multiple_visualizations(self, mock_config):
@@ -141,14 +141,18 @@ class TestGraphVisualizationIntegration:
                             "columns": ["x", "y"]
                         }
                         
-                        agent.llm.ainvoke.return_value = AIMessage(content=json.dumps({
+                        chart_config1 = {
                             "chart_type": "scatter",
-                            "reasoning": "Scatter plot for correlation",
-                            "config": {"x_axis": "x", "y_axis": "y", "title": "Test 1", "color_field": None}
-                        }))
+                            "x_axis": "x",
+                            "y_axis": "y",
+                            "title": "Test 1",
+                            "color_field": None
+                        }
                         
-                        result1 = await tool.arun(query_result1)
+                        result1 = await tool.arun(query_result1, thread_id="multi_viz_thread", chart_config=chart_config1)
                         assert result1["status"] == "success"
+                        assert "metadata" in result1
+                        assert result1["metadata"]["thread_id"] == "multi_viz_thread"
                         
                         # Second visualization
                         query_result2 = {
@@ -156,22 +160,24 @@ class TestGraphVisualizationIntegration:
                             "columns": ["category", "count"]
                         }
                         
-                        agent.llm.ainvoke.return_value = AIMessage(content=json.dumps({
+                        chart_config2 = {
                             "chart_type": "pie",
-                            "reasoning": "Pie chart for distribution",
-                            "config": {"x_axis": "category", "y_axis": "count", "title": "Test 2", "color_field": None}
-                        }))
+                            "x_axis": "category",
+                            "y_axis": "count",
+                            "title": "Test 2",
+                            "color_field": None
+                        }
                         
-                        result2 = await tool.arun(query_result2)
+                        result2 = await tool.arun(query_result2, thread_id="multi_viz_thread", chart_config=chart_config2)
                         assert result2["status"] == "success"
+                        assert "metadata" in result2
+                        assert result2["metadata"]["thread_id"] == "multi_viz_thread"
                         
-                        # Verify memory contains all references
-                        assert len(tool.memory) >= 4  # At least 2 pre + 2 post markers
-                        
-                        # Verify no context loss between calls
-                        viz_entries = [m for m in tool.memory if m.get("metadata", {}).get("type") == "visualization"]
-                        assert len(viz_entries) == 2
-                        assert all("graph_ref" in entry["metadata"] for entry in viz_entries)
+                        # Verify both results contain proper metadata for thread persistence
+                        assert result1["metadata"]["type"] == "visualization"
+                        assert result2["metadata"]["type"] == "visualization"
+                        assert "graph_ref" in result1["metadata"]
+                        assert "graph_ref" in result2["metadata"]
     
     @pytest.mark.asyncio
     async def test_error_resilience(self, mock_config):
@@ -278,61 +284,64 @@ class TestMemoryManagement:
     """Test memory management and context preservation"""
     
     @pytest.mark.asyncio
-    async def test_memory_updates_tracked(self):
-        """Test that all visualization events are tracked in memory"""
+    async def test_metadata_for_thread_persistence(self):
+        """Test that visualization events include metadata for thread persistence"""
         mock_agent = Mock()
         mock_agent.llm = AsyncMock()
         mock_agent.config = {}
         
         tool = GraphVisualizationTool(mock_agent)
         
-        # Mock successful LLM response
-        mock_agent.llm.ainvoke.return_value = AIMessage(content=json.dumps({
+        # Provide chart configuration
+        chart_config = {
             "chart_type": "bar",
-            "reasoning": "Test reasoning",
-            "config": {"x_axis": "x", "y_axis": "y", "title": "Test", "color_field": None}
-        }))
+            "x_axis": "x",
+            "y_axis": "y",
+            "title": "Test",
+            "color_field": None
+        }
         
         query_result = {
             "rows": [{"x": "A", "y": 10}],
             "columns": ["x", "y"]
         }
         
-        await tool.arun(query_result)
+        result = await tool.arun(query_result, thread_id="test_memory_thread", chart_config=chart_config)
         
-        # Check memory entries
-        assert len(tool.memory) >= 2
+        # Check metadata in result for thread persistence
+        assert result["status"] == "success"
+        assert "metadata" in result
         
-        # Pre-invocation marker
-        pre_marker = tool.memory[0]
-        assert pre_marker["role"] == "assistant"
-        assert pre_marker["metadata"]["tool_invoke"] == "graph_visualization"
+        metadata = result["metadata"]
+        assert metadata["type"] == "visualization"
+        assert metadata["thread_id"] == "test_memory_thread"
+        assert "graph_ref" in metadata
+        assert "timestamp" in metadata
+        assert "pre_execution" in metadata
         
-        # Post-execution entry
-        post_entry = tool.memory[1]
-        assert post_entry["role"] == "tool"
-        assert post_entry["metadata"]["type"] == "visualization"
-        assert "graph_ref" in post_entry["metadata"]
-        assert "timestamp" in post_entry["metadata"]
+        # Verify pre-execution metadata
+        assert metadata["pre_execution"]["tool_invoke"] == "graph_visualization"
+        assert metadata["pre_execution"]["thread_id"] == "test_memory_thread"
     
     @pytest.mark.asyncio
-    async def test_error_logged_to_memory(self):
-        """Test that errors are properly logged to memory"""
+    async def test_error_metadata_for_thread_persistence(self):
+        """Test that errors include proper metadata for thread persistence"""
         mock_agent = Mock()
         mock_agent.llm = AsyncMock()
         mock_agent.config = {}
         
         tool = GraphVisualizationTool(mock_agent)
         
-        # Make LLM fail
-        mock_agent.llm.ainvoke.side_effect = ValueError("Test error")
-        
-        result = await tool.arun({"rows": [], "columns": []})
+        # Pass invalid data to cause error (no config, empty data)
+        result = await tool.arun({"rows": [], "columns": []}, thread_id="error_thread", chart_config=None)
         
         # Check error in result
         assert result["status"] == "error"
+        assert "metadata" in result
         
-        # Check error logged to memory
-        error_entries = [m for m in tool.memory if m.get("metadata", {}).get("type") == "viz_error"]
-        assert len(error_entries) == 1
-        assert "Test error" in error_entries[0]["metadata"]["error"]
+        # Check error metadata for thread persistence
+        metadata = result["metadata"]
+        assert metadata["type"] == "viz_error"
+        assert metadata["thread_id"] == "error_thread"
+        assert "error" in metadata
+        assert "timestamp" in metadata
