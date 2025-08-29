@@ -235,7 +235,7 @@ async def mcp_status():
                     all_resources_data[resource_uri] = content
                     
                     # Extract metadata if found
-                    if "metadata" in resource_uri.lower() and isinstance(content, dict):
+                    if "metadata" in str(resource_uri).lower() and isinstance(content, dict):
                         metadata = content
                         logger.debug(f"Found metadata in resource: {resource_uri}")
                 except Exception as e:
