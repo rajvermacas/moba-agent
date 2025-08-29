@@ -54,7 +54,7 @@ class ChartConfig(BaseModel):
         default=None,
         description="Aggregation method (sum, avg, count, etc.)"
     )
-    filters: Optional[Dict[str, Any]] = Field(
+    filters: Optional[Dict[str, str]] = Field(
         default=None,
         description="Additional filters or parameters for chart generation"
     )
