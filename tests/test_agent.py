@@ -197,14 +197,16 @@ class TestMCPAgent:
         assert agent._initialized == False
     
     @pytest.mark.asyncio
-    async def test_create_simple_agent(self, mock_config, mock_llm):
-        """Test creating simple agent without tools"""
+    async def test_create_agent_without_tools(self, mock_config, mock_llm):
+        """Test creating agent without tools"""
         agent = MCPAgent(mock_config)
         agent.llm = mock_llm
+        agent.all_tools = []  # No tools available
         
-        simple_agent = agent._create_simple_agent()
+        # The agent should still be created successfully
+        await agent._create_agent()
         
-        assert simple_agent is not None
+        assert agent.agent is not None
     
     @pytest.mark.asyncio
     async def test_resource_injection_on_first_message(self, mock_config):

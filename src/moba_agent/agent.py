@@ -8,17 +8,20 @@ import json
 from typing import Dict, Any, List, Optional, Tuple
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.prebuilt import create_react_agent
-from langgraph.graph import StateGraph, MessagesState, START
+from langgraph.prebuilt import create_react_agent, ToolNode
+from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, BaseMessage
 from .config import Config
 from .resources import ResourceHandler
 from .tools import ToolHandler
 from .graph_visualization_tool import GraphVisualizationTool
-from .schemas import StructuredAgentResponse
+from .schemas import StructuredAgentResponse, ExtendedAgentState
+from .constants import QUERY_TOOL_PATTERN, AGENT_RECURSION_LIMIT, AGENT_MAX_CONSECUTIVE_TOOL_ERRORS
 # Import native tools from native_tools package
 from .native_tools.gitlab import GitLabIssueTool
+# Import and apply Gemini patch for finish_reason enum issue
+from .gemini_patch import apply_gemini_patch
 
 
 class MCPAgent:
@@ -34,6 +37,12 @@ class MCPAgent:
         self.config = config or Config()
         self.logger = logging.getLogger(__name__)
         self.logger.info("Initializing MCP Agent with Gemini 2.5 Flash")
+        
+        # Apply Gemini patch for finish_reason enum issue
+        if apply_gemini_patch():
+            self.logger.info("Applied Gemini finish_reason patch successfully")
+        else:
+            self.logger.warning("Failed to apply Gemini patch, errors may occur with unrecognized enum values")
         
         # Initialize components
         self.mcp_client = None
@@ -124,11 +133,11 @@ class MCPAgent:
             base_llm = ChatGoogleGenerativeAI(**gemini_config)
             
             # Configure structured output for visualization responses
-            self.llm_structured = base_llm.with_structured_output(
+            self.llm_for_visualization = base_llm.with_structured_output(
                 StructuredAgentResponse
             )
             
-            # Keep base LLM for agent use (tools need unstructured)
+            # Keep base LLM for agent use (will bind tools later)
             self.llm = base_llm
             
             self.logger.info(f"Gemini LLM initialized with model: {self.config.agent_model}")
@@ -152,6 +161,9 @@ class MCPAgent:
                 tool_names = [tool.name if hasattr(tool, 'name') else str(tool) 
                              for tool in self.mcp_tools]
                 self.logger.debug(f"Available MCP tools: {tool_names}")
+                # DEBUG: Check specifically for execute_query_mherb
+                mherb_tools = [t for t in tool_names if 'mherb' in str(t).lower()]
+                self.logger.debug(f"[DEBUG] MHerb related tools: {mherb_tools}")
             
         except Exception as e:
             self.logger.error(f"Failed to load MCP tools: {e}")
@@ -200,22 +212,173 @@ class MCPAgent:
             tool_names = [tool.name for tool in self.native_tools]
             self.logger.debug(f"Available native tools: {tool_names}")
     
-    
-    async def _create_agent(self):
-        """Create LangGraph agent with MCP tools"""
-        self.logger.debug("Creating LangGraph agent")
+    async def _visualization_node(self, state: ExtendedAgentState) -> ExtendedAgentState:
+        """
+        Analyze conversation and query results for visualization needs.
+        
+        This node:
+        1. Examines the conversation history
+        2. Analyzes any query results
+        3. Makes structured decisions about visualization
+        4. Persists decisions in agent state
+        """
+        # Log memory access for debugging
+        thread_id = state.get("thread_id", "default")
+        self.logger.debug(f"[MEMORY_ACCESS] Agent: visualization_node, Thread: {thread_id}, Action: analyzing")
+        
+        # Prepare enhanced messages with system context
+        messages = state["messages"]
+        system_prompt = self._get_visualization_system_prompt()
+        enhanced_messages = [SystemMessage(content=system_prompt)] + messages
+        
+        # Add query result context if available
+        if state.get("query_result"):
+            result_summary = self._format_query_result_summary(state["query_result"])
+            enhanced_messages.append(SystemMessage(content=result_summary))
         
         try:
+            # Invoke structured LLM for visualization decision
+            structured_response = await self.llm_for_visualization.ainvoke(enhanced_messages)
+            
+            # Log decision
+            self.logger.info(f"Visualization decision - Should visualize: {structured_response.should_visualize}")
+            if structured_response.should_visualize and structured_response.chart_config:
+                self.logger.info(f"Chart type selected: {structured_response.chart_config.chart_type}")
+            
+            # Store in state for downstream use
+            state["visualization_decision"] = structured_response
+            
+            # Important: Do NOT add messages here - let the agent format the response
+            # The agent will see this decision and create a user-friendly message
+            
+        except Exception as e:
+            self.logger.error(f"Visualization node failed: {e}", exc_info=True)
+            # Set default decision on error
+            state["visualization_decision"] = StructuredAgentResponse(
+                content="",
+                should_visualize=False,
+                chart_config=None,
+                reasoning="Error in visualization analysis"
+            )
+        
+        self.logger.debug(f"[MEMORY_COMPLETE] Agent: visualization_node, Thread: {thread_id}")
+        return state
+    
+    def _get_visualization_system_prompt(self) -> str:
+        """Get the system prompt for visualization decisions"""
+        return """
+        Analyze the conversation and any database query results to determine:
+        1. Whether visualization is needed (should_visualize)
+        2. If yes, what chart configuration to use (chart_config)
+        3. Provide reasoning for your decisions
+        
+        Consider visualization when:
+        - Query results contain aggregated data
+        - User explicitly asks for charts/graphs/visualization
+        - Data shows trends, comparisons, or distributions
+        - Results would be clearer in visual format
+        - Try to always provide visualization (Mandatory)
+        
+        Choose appropriate chart types based on data characteristics:
+        - Bar/Column: Categorical comparisons
+        - Line: Trends over time
+        - Pie: Part-to-whole relationships
+        - Scatter: Correlations
+        - Heatmap: Matrix data
+        - Table: Detailed records
+        """
+    
+    def _format_query_result_summary(self, query_result: Dict[str, Any]) -> str:
+        """Format query result summary for context"""
+        result_summary = "\nDatabase Query Result Summary:\n"
+        result_summary += f"- Rows returned: {len(query_result.get('rows', []))}\n"
+        if query_result.get('rows'):
+            result_summary += f"- Columns: {list(query_result['rows'][0].keys())}\n"
+            result_summary += f"- Sample rows: {query_result['rows'][:3]}\n"
+        return result_summary
+    
+    async def _create_agent(self):
+        """Create custom agent with visualization capabilities"""
+        self.logger.debug("Creating custom agent with visualization node")
+        
+        try:
+            # CRITICAL: Bind tools to the LLM so it knows how to use them
             if self.all_tools:
-                # Create agent with all tools (native + MCP)
-                self.agent = create_react_agent(
-                    self.llm,
-                    self.all_tools,
-                    prompt="""You are a helpful assistant with the following capabilities:
+                self.llm = self.llm.bind_tools(self.all_tools)
+                self.logger.info(f"Bound {len(self.all_tools)} tools to LLM")
+            
+            workflow = StateGraph(ExtendedAgentState)
+            
+            # Create tool node using all available tools
+            if self.all_tools:
+                tool_node = ToolNode(self.all_tools)
+            else:
+                # Create a dummy tool node for consistency
+                tool_node = lambda state: state
+            
+            # Create agent node with proper prompt and visualization formatting
+            async def agent_node(state: ExtendedAgentState):
+                """Main agent reasoning node - handles tools, errors, and visualization formatting"""
+                messages = state["messages"]
+                
+                # Track consecutive errors per tool
+                if "tool_error_counts" not in state:
+                    state["tool_error_counts"] = {}
+                
+                # Check recent messages for tool errors
+                last_messages = messages[-2:] if len(messages) >= 2 else messages
+                for msg in last_messages:
+                    if isinstance(msg, ToolMessage):
+                        if hasattr(msg, 'status') and msg.status == 'error':
+                            # Increment error count for this tool
+                            tool_name = msg.name
+                            state['tool_error_counts'][tool_name] = state['tool_error_counts'].get(tool_name, 0) + 1
+                            
+                            # Check if we've hit the limit
+                            if state['tool_error_counts'][tool_name] >= AGENT_MAX_CONSECUTIVE_TOOL_ERRORS:
+                                # Stop retrying this tool
+                                error_response = f"I've tried {tool_name} {AGENT_MAX_CONSECUTIVE_TOOL_ERRORS} times but it keeps failing. "
+                                error_response += f"The last error was: {msg.content}. "
+                                error_response += "Let me try a different approach or please check the query."
+                                return {"messages": [AIMessage(content=error_response)]}
+                        else:
+                            # Success - reset error count for this tool
+                            if msg.name in state.get('tool_error_counts', {}):
+                                state['tool_error_counts'][msg.name] = 0
+                
+                # Check if we need to format visualization response
+                if state.get("visualization_decision") and not state.get("visualization_formatted"):
+                    viz = state["visualization_decision"]
+                    if viz.should_visualize and viz.chart_config:
+                        # Format user-friendly message
+                        response = f"I've created a {viz.chart_config.chart_type} chart "
+                        if viz.chart_config.title:
+                            response += f"titled '{viz.chart_config.title}' "
+                        response += "to visualize the data. "
+                        response += viz.content if viz.content else "The chart shows the query results clearly."
+                    else:
+                        response = viz.content or "Based on the data analysis, no visualization is needed."
+                    
+                    state["visualization_formatted"] = True
+                    return {"messages": [AIMessage(content=response)]}
+                
+                # Add system prompt if not present
+                if not messages or not isinstance(messages[0], SystemMessage):
+                    self.logger.debug(f"[DEBUG] Adding system prompt to messages")
+                    system_prompt = """You are a helpful assistant with the following capabilities:
 
-1. **Data Visualization**: When users ask for any visualization, charts, or graphs, you MUST not say you cannot help. Just ignore and continue ahead with the conversation but never ever say you cannot help them. Always summarize the data and provide a concise response.
+1. **Data Visualization**: You can create interactive charts and graphs from query results. When users ask for visualizations:
+   - Execute the appropriate database query using available tools
+   - The system will automatically analyze the results and generate appropriate visualizations
+   - Summarize the data insights along with the visualization
+   - Suggest the most suitable chart types based on the data characteristics
 
-2. **GitLab Integration**: You can create GitLab issues when requested. Use the create_gitlab_issue tool to:
+2. **Database Queries**: You have access to execute_query_* tools to retrieve data from various databases. Use these tools to:
+   - Fetch data for analysis
+   - Answer questions about the data
+   - Prepare datasets for visualization
+
+3. **GitLab Integration**: You can create GitLab issues when requested. Use the create_gitlab_issue tool to:
    - Create new issues in GitLab projects
    - Set issue titles and descriptions
    - Add labels, assignees, and milestones
@@ -227,32 +390,129 @@ When creating GitLab issues:
 - Provide the issue URL after successful creation
 - Handle errors gracefully and suggest fixes
 
-Always be proactive in suggesting the use of available tools when appropriate. This is important for you to follow.""",
-                    checkpointer=self.checkpointer
-                )
-                self.logger.info(f"Created ReAct agent with {len(self.all_tools)} tools")
-            else:
-                # Create simple agent without tools
-                self.agent = self._create_simple_agent()
-                self.logger.info("Created simple agent without tools")
+**IMPORTANT INSTRUCTION**: When users ask for data, analysis, or information that requires database queries:
+- IMMEDIATELY use the appropriate execute_query_* tool to fetch the data
+- Do NOT show SQL queries to the user unless they explicitly ask to see the query
+- Execute queries directly and show the results
+- If a user asks something like "show top products by sales", directly execute the query using execute_query_mherb or the appropriate tool
+
+Always be proactive in using available tools. When data is retrieved, consider if a visualization would help the user better understand the results."""
+                    messages = [SystemMessage(content=system_prompt)] + messages
+                
+                # DEBUG: Log the tools available to the agent
+                self.logger.debug(f"[DEBUG] Agent invoking LLM with {len(self.all_tools)} tools available")
+                if self.all_tools:
+                    tool_names = [getattr(t, 'name', str(t)) for t in self.all_tools[:5]]  # Show first 5
+                    self.logger.debug(f"[DEBUG] Sample tools: {tool_names}")
+                    # Check specifically for execute_query tools
+                    query_tools = [getattr(t, 'name', str(t)) for t in self.all_tools if 'execute_query' in str(getattr(t, 'name', str(t))).lower()]
+                    self.logger.debug(f"[DEBUG] Query execution tools available: {query_tools}")
+                
+                # DEBUG: Log message content to understand what agent sees
+                last_human_msg = None
+                for msg in reversed(messages):
+                    if isinstance(msg, HumanMessage):
+                        last_human_msg = msg.content[:200]
+                        break
+                self.logger.debug(f"[DEBUG] Last user message: {last_human_msg}")
+                
+                response = await self.llm.ainvoke(messages)
+                
+                # DEBUG: Log what the agent decided
+                self.logger.debug(f"[DEBUG] Agent response type: {type(response)}")
+                if hasattr(response, 'tool_calls'):
+                    self.logger.debug(f"[DEBUG] Agent tool_calls: {response.tool_calls}")
+                if hasattr(response, 'content'):
+                    self.logger.debug(f"[DEBUG] Agent content preview: {response.content[:200] if response.content else 'None'}")
+                
+                return {"messages": [response]}
+            
+            # Define routing logic
+            def route_after_agent(state: ExtendedAgentState) -> str:
+                """Route after agent - handles tools, visualization, and formatting"""
+                query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
+                
+                last_message = state["messages"][-1]
+                
+                # If agent wants to call tools
+                if isinstance(last_message, AIMessage):
+                    if hasattr(last_message, "tool_calls") and last_message.tool_calls:
+                        self.logger.debug(f"[DEBUG] Routing to tools - found {len(last_message.tool_calls)} tool calls")
+                        for tc in last_message.tool_calls:
+                            self.logger.debug(f"[DEBUG] Tool call: {tc.get('name', 'unknown')} with args: {tc.get('args', {})}") 
+                        return "tools"
+                    else:
+                        self.logger.debug(f"[DEBUG] No tool calls in AIMessage")
+                
+                # Check if we just came from visualization node
+                if state.get("visualization_decision") and state.get("visualization_formatted"):
+                    # Agent has formatted the response, we're done
+                    return "end"
+                
+                # Check if we need visualization (haven't done it yet)
+                if not state.get("visualization_decision"):
+                    for msg in reversed(state["messages"][-10:] if len(state["messages"]) > 10 else state["messages"]):
+                        if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
+                            # Skip error messages
+                            if hasattr(msg, 'status') and msg.status == 'error':
+                                continue
+                            try:
+                                result = json.loads(msg.content)
+                                if result.get("rows") and len(result["rows"]) > 0:
+                                    state["query_result"] = result
+                                    return "visualize"
+                            except (json.JSONDecodeError, TypeError):
+                                pass
+                
+                return "end"  # Conversation complete
+            
+            # Add all nodes
+            workflow.add_node("agent", agent_node)
+            if self.all_tools:
+                workflow.add_node("tools", tool_node)
+            workflow.add_node("visualize", self._visualization_node)
+            
+            # Set up edges
+            workflow.set_entry_point("agent")
+            
+            # CRITICAL EDGES:
+            if self.all_tools:
+                # 1. Tools ALWAYS route back to agent (for error handling and observation)
+                workflow.add_edge("tools", "agent")
+            
+            # 2. Visualization ALWAYS routes back to agent (for formatting user response)
+            workflow.add_edge("visualize", "agent")
+            
+            # 3. Agent is the central hub - decides all routing
+            edges = {
+                "visualize": "visualize",  # Generate visualization config
+                "end": END                 # Complete conversation
+            }
+            if self.all_tools:
+                edges["tools"] = "tools"   # Execute tools
+            
+            workflow.add_conditional_edges(
+                "agent", 
+                route_after_agent,
+                edges
+            )
+            
+            # Compile with checkpointer and recursion limit
+            self.agent = workflow.compile(
+                checkpointer=self.checkpointer,
+                interrupt_before=[],
+                interrupt_after=[]
+            ).with_config(
+                recursion_limit=AGENT_RECURSION_LIMIT  # Prevent infinite loops
+            )
+            
+            self.logger.info(f"Custom agent created with recursion limit: {AGENT_RECURSION_LIMIT}")
+            if self.all_tools:
+                self.logger.info(f"Agent has {len(self.all_tools)} tools available")
             
         except Exception as e:
-            self.logger.error(f"Failed to create agent: {e}")
+            self.logger.error(f"Failed to create custom agent: {e}", exc_info=True)
             raise
-    
-    def _create_simple_agent(self):
-        """Create a simple agent without tools"""
-        def call_model(state: MessagesState):
-            """Call the LLM model"""
-            response = self.llm.invoke(state["messages"])
-            return {"messages": [response]}
-        
-        # Build state graph
-        builder = StateGraph(MessagesState)
-        builder.add_node("model", call_model)
-        builder.add_edge(START, "model")
-        
-        return builder.compile(checkpointer=self.checkpointer)
     
     async def _format_resources_context(self) -> Optional[SystemMessage]:
         """
@@ -321,66 +581,6 @@ Always be proactive in suggesting the use of available tools when appropriate. T
             self.logger.error(f"Failed to format resources context: {e}", exc_info=True)
             return None
     
-    async def invoke(self, message: str, thread_id: str = "default") -> str:
-        """
-        Invoke the agent with a message
-        
-        Args:
-            message: User message
-            thread_id: Thread ID for conversation context
-            
-        Returns:
-            Agent response
-        """
-        if not self._initialized:
-            await self.initialize()
-        
-        self.logger.debug(f"Invoking agent with message: {message[:100]}...")
-        
-        try:
-            # Prepare messages list
-            messages = []
-            
-            # Check if this is the first message for this thread
-            if thread_id not in self._thread_resources_injected:
-                # Inject resources context on first message
-                resources_context = await self._format_resources_context()
-                if resources_context:
-                    messages.append(resources_context)
-                    self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
-                
-                # Mark thread as having resources injected
-                self._thread_resources_injected[thread_id] = True
-            
-            # Add the user message
-            input_message = HumanMessage(content=message)
-            messages.append(input_message)
-            
-            config = {"configurable": {"thread_id": thread_id}}
-            
-            # Invoke agent
-            response = await self.agent.ainvoke(
-                {"messages": messages},
-                config=config
-            )
-            
-            # Extract response
-            if response and "messages" in response:
-                last_message = response["messages"][-1]
-                if isinstance(last_message, AIMessage):
-                    result = last_message.content
-                else:
-                    result = str(last_message)
-            else:
-                result = str(response)
-            
-            self.logger.debug(f"Agent response: {result[:100]}...")
-            return result
-            
-        except Exception as e:
-            self.logger.error(f"Failed to invoke agent: {e}", exc_info=True)
-            raise
-
     # ============================================================================
     # Message Preparation Methods
     # ============================================================================
@@ -637,81 +837,6 @@ Always be proactive in suggesting the use of available tools when appropriate. T
             self.logger.error(f"Visualization generation failed: {e}", exc_info=True)
             return None
     
-    async def _get_structured_response(
-        self,
-        messages: List[BaseMessage],
-        query_result: Optional[Dict] = None
-    ) -> StructuredAgentResponse:
-        """
-        Get a structured response from the LLM for visualization decisions.
-        
-        This method invokes the LLM with structured output to get clear decisions
-        about visualization needs and chart configurations.
-        
-        Args:
-            messages: Conversation history
-            query_result: Database query result if available
-            
-        Returns:
-            StructuredAgentResponse with visualization decisions
-        """
-        try:
-            # Build a focused prompt for structured response
-            system_prompt = """
-            Analyze the conversation and any database query results to determine:
-            1. Whether visualization is needed (should_visualize)
-            2. If yes, what chart configuration to use (chart_config)
-            3. Provide reasoning for your decisions
-            
-            Consider visualization when:
-            - Query results contain aggregated data
-            - User explicitly asks for charts/graphs/visualization
-            - Data shows trends, comparisons, or distributions
-            - Results would be clearer in visual format
-            - Try to always provide visualization (Mandatory)
-            
-            Choose appropriate chart types based on data characteristics:
-            - Bar/Column: Categorical comparisons
-            - Line: Trends over time
-            - Pie: Part-to-whole relationships
-            - Scatter: Correlations
-            - Heatmap: Matrix data
-            - Table: Detailed records
-            """
-            
-            # Add system message for context
-            enhanced_messages = [SystemMessage(content=system_prompt)] + messages
-            
-            # If we have query results, add them to context
-            if query_result:
-                result_summary = f"\nDatabase Query Result Summary:\n"
-                result_summary += f"- Rows returned: {len(query_result.get('rows', []))}\n"
-                if query_result.get('rows'):
-                    result_summary += f"- Columns: {list(query_result['rows'][0].keys())}\n"
-                    result_summary += f"- Sample rows: {query_result['rows'][:3]}\n"
-                enhanced_messages.append(SystemMessage(content=result_summary))
-            
-            # Get structured response from LLM
-            self.logger.debug("Invoking LLM for structured visualization response")
-            structured_response = await self.llm_structured.ainvoke(enhanced_messages)
-            
-            self.logger.info(f"Structured response - Visualize: {structured_response.should_visualize}")
-            if structured_response.should_visualize and structured_response.chart_config:
-                self.logger.info(f"Chart type selected: {structured_response.chart_config.chart_type}")
-            
-            return structured_response
-            
-        except Exception as e:
-            self.logger.error(f"Failed to get structured response: {e}", exc_info=True)
-            # Return default response on error
-            return StructuredAgentResponse(
-                content="",
-                should_visualize=False,
-                chart_config=None,
-                query_metadata=None,
-                reasoning="Error getting structured response"
-            )
-    
     # ============================================================================
     # Main Public Method
     # ============================================================================
@@ -746,10 +871,10 @@ Always be proactive in suggesting the use of available tools when appropriate. T
             # Step 1: Prepare messages for the thread
             messages = await self._prepare_messages_for_thread(message, thread_id)
             
-            # Step 2: Invoke the agent
+            # Step 2: Invoke the agent with extended state
             config = {"configurable": {"thread_id": thread_id}}
             response = await self.agent.ainvoke(
-                {"messages": messages},
+                {"messages": messages, "thread_id": thread_id},
                 config=config
             )
             
@@ -773,35 +898,36 @@ Always be proactive in suggesting the use of available tools when appropriate. T
             if latest_query_result:
                 result["query_result"] = latest_query_result
 
-            if query_result:
-                # Step 6: Get structured response for visualization decisions
-                structured_resp = await self._get_structured_response(
-                    messages=all_messages,
-                    query_result=query_result
-                )
+            # Step 6: Check if visualization was generated from the state
+            if response.get("visualization_decision"):
+                structured_resp = response["visualization_decision"]
                 
                 # Step 7: Handle visualization if structured response indicates need
                 if structured_resp.should_visualize and structured_resp.chart_config:
                     self.logger.info(
-                        f"Structured response indicates visualization needed: "
+                        f"Visualization decision from state - Chart type: "
                         f"{structured_resp.chart_config.chart_type}"
                     )
                     
                     # Convert Pydantic model to dict for compatibility
                     chart_config_dict = structured_resp.chart_config.model_dump()
                     
-                    # Generate visualization
-                    graph_data = await self._handle_visualization_with_config(
-                        query_result,
-                        chart_config_dict,
-                        thread_id
-                    )
-                    if graph_data:
-                        result["graph"] = graph_data
+                    # Use the query_result that triggered visualization
+                    viz_query_result = response.get("query_result") or query_result
+                    
+                    if viz_query_result:
+                        # Generate visualization
+                        graph_data = await self._handle_visualization_with_config(
+                            viz_query_result,
+                            chart_config_dict,
+                            thread_id
+                        )
+                        if graph_data:
+                            result["graph"] = graph_data
                 else:
-                    self.logger.info("Structured response: No visualization needed")
-            elif query_result:
-                self.logger.info("No query_result found in the message history")
+                    self.logger.info("Visualization decision: No visualization needed")
+            else:
+                self.logger.debug("No visualization decision in state")
             
             self.logger.debug(
                 f"Agent response with query tracking completed. "

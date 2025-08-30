@@ -8,6 +8,7 @@ text-based parsing and provide type-safe responses.
 from typing import Optional, Dict, Any, List
 from pydantic import BaseModel, Field
 from enum import Enum
+from langgraph.graph import MessagesState
 
 
 class ChartType(str, Enum):
@@ -129,3 +130,17 @@ class StructuredAgentResponse(BaseModel):
             }
         }
     }
+
+
+class ExtendedAgentState(MessagesState):
+    """
+    Extended state to include visualization decisions.
+    
+    This state class extends the base MessagesState to track additional
+    information needed for the visualization node architecture.
+    """
+    visualization_decision: Optional[StructuredAgentResponse] = None
+    query_result: Optional[Dict[str, Any]] = None
+    thread_id: str = "default"
+    visualization_formatted: bool = False
+    tool_error_counts: Dict[str, int] = {}
