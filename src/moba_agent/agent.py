@@ -494,54 +494,52 @@ Always be proactive in suggesting the use of available tools when appropriate. T
         
         return None
     
-    def _extract_query_results(self, messages: List[Any]) -> Optional[Dict]:
+    def _extract_query_results(self, messages: List[Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
         """
         Extract database query results from tool messages.
-        Only considers the last ToolMessage that appears after the latest HumanMessage
-        to avoid showing results from previous queries.
         
         Args:
             messages: List of messages from agent response
             
         Returns:
-            Query result from the last ToolMessage after the latest HumanMessage, or None
+            Tuple of (query_result, latest_query_result):
+            - query_result: Last query result found (original logic)
+            - latest_query_result: Query result only after latest HumanMessage
         """
-        # Find the index of the latest HumanMessage
-        latest_human_msg_idx = -1
-        for i, msg in enumerate(messages):
-            if isinstance(msg, HumanMessage):
-                latest_human_msg_idx = i
-                self.logger.debug(f"Found HumanMessage at index {i}")
+        query_result = None
+        latest_query_result = None
         
-        # If no HumanMessage found, don't extract any results
-        if latest_human_msg_idx == -1:
-            self.logger.debug("No HumanMessage found in messages, skipping query result extraction")
-            return None
+        # Original logic - get last query result from all messages
+        for msg in messages:
+            if isinstance(msg, ToolMessage):
+                result = self._parse_tool_message_for_query(msg)
+                if result:
+                    # Store the last query result (overwrite if multiple queries)
+                    query_result = result
         
-        # Find the last ToolMessage that appears after the latest HumanMessage
-        last_tool_msg = None
-        last_tool_msg_idx = -1
-        for i, msg in enumerate(messages):
-            if i > latest_human_msg_idx and isinstance(msg, ToolMessage):
-                last_tool_msg = msg
-                last_tool_msg_idx = i
-                self.logger.debug(f"Found ToolMessage at index {i} (after HumanMessage at {latest_human_msg_idx})")
+        # New logic - find latest HumanMessage and get query results after it
+        latest_human_msg_index = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], HumanMessage):
+                latest_human_msg_index = i
+                break
         
-        # If no ToolMessage found after the latest HumanMessage, return None
-        if last_tool_msg is None:
-            self.logger.debug("No ToolMessage found after latest HumanMessage")
-            return None
-        
-        # Parse the last ToolMessage for query results
-        self.logger.debug(f"Processing last ToolMessage at index {last_tool_msg_idx}")
-        query_result = self._parse_tool_message_for_query(last_tool_msg)
+        # If we found a HumanMessage, look for ToolMessages after it
+        if latest_human_msg_index >= 0:
+            for i in range(latest_human_msg_index + 1, len(messages)):
+                msg = messages[i]
+                if isinstance(msg, ToolMessage):
+                    result = self._parse_tool_message_for_query(msg)
+                    if result:
+                        # Store the last query result after the latest HumanMessage
+                        latest_query_result = result
         
         if query_result:
-            self.logger.info("Query result captured successfully from current user query")
-        else:
-            self.logger.debug("No query results found in last ToolMessage after latest HumanMessage")
+            self.logger.info("Query result captured successfully")
+        if latest_query_result:
+            self.logger.info("Latest query result (after last HumanMessage) captured successfully")
         
-        return query_result
+        return query_result, latest_query_result
     
     def _process_agent_response_messages(self, response: Dict) -> Tuple[str, List[Any], List[AIMessage]]:
         """
@@ -582,7 +580,6 @@ Always be proactive in suggesting the use of available tools when appropriate. T
         self,
         query_result: Dict,
         chart_config: Dict,
-        all_messages: List[Any],
         thread_id: str
     ) -> Optional[Dict]:
         """
@@ -608,7 +605,6 @@ Always be proactive in suggesting the use of available tools when appropriate. T
                 try:
                     viz_result = await self.graph_viz_tool.arun(
                         query_results=query_result,
-                        context=all_messages,
                         thread_id=thread_id,
                         chart_config=chart_config
                     )
@@ -769,10 +765,15 @@ Always be proactive in suggesting the use of available tools when appropriate. T
             result["response"] = response_text
             
             # Step 5: Extract query results if present
-            query_result = self._extract_query_results(all_messages)
+            # query_result = latest query_result in the history of messages
+            # latest_query_result = After HumanMessage if there was a query result
+            query_result, latest_query_result = self._extract_query_results(all_messages)
+            
+            # Use latest_query_result for current query context, but keep query_result for backward compatibility
+            if latest_query_result:
+                result["query_result"] = latest_query_result
+
             if query_result:
-                result["query_result"] = query_result
-                
                 # Step 6: Get structured response for visualization decisions
                 structured_resp = await self._get_structured_response(
                     messages=all_messages,
@@ -793,13 +794,14 @@ Always be proactive in suggesting the use of available tools when appropriate. T
                     graph_data = await self._handle_visualization_with_config(
                         query_result,
                         chart_config_dict,
-                        all_messages,
                         thread_id
                     )
                     if graph_data:
                         result["graph"] = graph_data
                 else:
                     self.logger.info("Structured response: No visualization needed")
+            elif query_result:
+                self.logger.info("No query_result found in the message history")
             
             self.logger.debug(
                 f"Agent response with query tracking completed. "

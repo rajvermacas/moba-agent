@@ -49,7 +49,7 @@ class GraphVisualizationTool:
         # The agent automatically adds tool results to thread state
         self.logger.debug(f"Memory entry prepared: {entry.get('role')}, type: {entry.get('metadata', {}).get('type')}")
     
-    async def arun(self, query_results: str, context: List = None, thread_id: str = None, chart_config: Dict[str, Any] = None) -> Dict[str, Any]:
+    async def arun(self, query_results: str, thread_id: str = None, chart_config: Dict[str, Any] = None) -> Dict[str, Any]:
         """
         Generate graph visualization using provided configuration.
         
