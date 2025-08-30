@@ -1,7 +1,7 @@
 """GitLab issue creation tool for MOBA Agent."""
 
 from urllib.parse import urlparse
-from typing import Dict, Any, Optional, Type
+from typing import Dict, Any, Optional, Type, List
 import gitlab
 from pydantic import BaseModel, Field
 import asyncio
@@ -21,7 +21,7 @@ class GitLabIssueParams(BaseModel):
     project_url: str = Field(description="Full GitLab project URL")
     title: str = Field(description="Issue title")
     description: str = Field(description="Issue description")
-    labels: Optional[list] = Field(default=None, description="Issue labels")
+    labels: Optional[List[str]] = Field(default=None, description="Issue labels")
     assignee: Optional[str] = Field(default=None, description="Assignee username")
     milestone: Optional[str] = Field(default=None, description="Milestone title")
 
@@ -57,7 +57,7 @@ class GitLabIssueTool(NativeTool):
         project_url: str,
         title: str,
         description: str,
-        labels: Optional[list] = None,
+        labels: Optional[List[str]] = None,
         assignee: Optional[str] = None,
         milestone: Optional[str] = None
     ) -> str:
@@ -91,7 +91,7 @@ class GitLabIssueTool(NativeTool):
         project_url: str,
         title: str,
         description: str,
-        labels: Optional[list] = None,
+        labels: Optional[List[str]] = None,
         assignee: Optional[str] = None,
         milestone: Optional[str] = None
     ) -> str:
