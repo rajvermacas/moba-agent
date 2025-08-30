@@ -497,24 +497,49 @@ Always be proactive in suggesting the use of available tools when appropriate. T
     def _extract_query_results(self, messages: List[Any]) -> Optional[Dict]:
         """
         Extract database query results from tool messages.
+        Only considers the last ToolMessage that appears after the latest HumanMessage
+        to avoid showing results from previous queries.
         
         Args:
             messages: List of messages from agent response
             
         Returns:
-            Last query result found, or None
+            Query result from the last ToolMessage after the latest HumanMessage, or None
         """
-        query_result = None
+        # Find the index of the latest HumanMessage
+        latest_human_msg_idx = -1
+        for i, msg in enumerate(messages):
+            if isinstance(msg, HumanMessage):
+                latest_human_msg_idx = i
+                self.logger.debug(f"Found HumanMessage at index {i}")
         
-        for msg in messages:
-            if isinstance(msg, ToolMessage):
-                result = self._parse_tool_message_for_query(msg)
-                if result:
-                    # Store the last query result (overwrite if multiple queries)
-                    query_result = result
+        # If no HumanMessage found, don't extract any results
+        if latest_human_msg_idx == -1:
+            self.logger.debug("No HumanMessage found in messages, skipping query result extraction")
+            return None
+        
+        # Find the last ToolMessage that appears after the latest HumanMessage
+        last_tool_msg = None
+        last_tool_msg_idx = -1
+        for i, msg in enumerate(messages):
+            if i > latest_human_msg_idx and isinstance(msg, ToolMessage):
+                last_tool_msg = msg
+                last_tool_msg_idx = i
+                self.logger.debug(f"Found ToolMessage at index {i} (after HumanMessage at {latest_human_msg_idx})")
+        
+        # If no ToolMessage found after the latest HumanMessage, return None
+        if last_tool_msg is None:
+            self.logger.debug("No ToolMessage found after latest HumanMessage")
+            return None
+        
+        # Parse the last ToolMessage for query results
+        self.logger.debug(f"Processing last ToolMessage at index {last_tool_msg_idx}")
+        query_result = self._parse_tool_message_for_query(last_tool_msg)
         
         if query_result:
-            self.logger.info("Query result captured successfully")
+            self.logger.info("Query result captured successfully from current user query")
+        else:
+            self.logger.debug("No query results found in last ToolMessage after latest HumanMessage")
         
         return query_result
     
