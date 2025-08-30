@@ -24,6 +24,9 @@ class Config:
     agent_temperature: float = field(default_factory=lambda: float(os.getenv("AGENT_TEMPERATURE", "0.1")))
     agent_max_tokens: int = field(default_factory=lambda: int(os.getenv("AGENT_MAX_TOKENS", "4096")))
     
+    # GitLab Integration Configuration
+    gitlab_token: str = field(default_factory=lambda: os.getenv("MOBA_GITLAB_TOKEN", ""))
+    
     # MCP Configuration File Path
     mcp_config_file: str = field(default_factory=lambda: os.getenv("MCP_CONFIG_FILE", "mcp_servers.json"))
     

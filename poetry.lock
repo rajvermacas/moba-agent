@@ -1967,6 +1967,27 @@ files = [
 cli = ["click (>=5.0)"]
 
 [[package]]
+name = "python-gitlab"
+version = "4.13.0"
+description = "A python wrapper for the GitLab API"
+optional = false
+python-versions = ">=3.8.0"
+groups = ["main"]
+files = [
+    {file = "python_gitlab-4.13.0-py3-none-any.whl", hash = "sha256:8299a054fb571da16e1a8c1868fff01f34ac41ea1410c713a4647b3bbb2aa279"},
+    {file = "python_gitlab-4.13.0.tar.gz", hash = "sha256:576bfb0901faca0c6b2d1ff2592e02944a6ec3e086c3129fb43c2a0df56a1c67"},
+]
+
+[package.dependencies]
+requests = ">=2.32.0"
+requests-toolbelt = ">=1.0.0"
+
+[package.extras]
+autocompletion = ["argcomplete (>=1.10.0,<3)"]
+graphql = ["gql[httpx] (>=3.5.0,<4)"]
+yaml = ["PyYaml (>=6.0.1)"]
+
+[[package]]
 name = "python-multipart"
 version = "0.0.20"
 description = "A streaming multipart parser for Python"
@@ -2467,14 +2488,14 @@ full = ["httpx (>=0.27.0,<0.29.0)", "itsdangerous", "jinja2", "python-multipart 
 
 [[package]]
 name = "tenacity"
-version = "9.1.2"
+version = "8.5.0"
 description = "Retry code until it succeeds"
 optional = false
-python-versions = ">=3.9"
+python-versions = ">=3.8"
 groups = ["main"]
 files = [
-    {file = "tenacity-9.1.2-py3-none-any.whl", hash = "sha256:f77bf36710d8b73a50b2dd155c97b870017ad21afe6ab300326b0371b3b05138"},
-    {file = "tenacity-9.1.2.tar.gz", hash = "sha256:1169d376c297e7de388d18b4481760d478b0e99a777cad3a9c86e556f4b697cb"},
+    {file = "tenacity-8.5.0-py3-none-any.whl", hash = "sha256:b594c2a5945830c267ce6b79a166228323ed52718f30302c1359836112346687"},
+    {file = "tenacity-8.5.0.tar.gz", hash = "sha256:8bc6c0c8a09b31e6cad13c47afbed1a567518250a9a171418582ed8d9c20ca78"},
 ]
 
 [package.extras]
@@ -2858,4 +2879,4 @@ cffi = ["cffi (>=1.17) ; python_version >= \"3.13\" and platform_python_implemen
 [metadata]
 lock-version = "2.1"
 python-versions = "^3.10"
-content-hash = "a5c8c9c5bd1b1952634d18cbe94d3f3209652e69c15bca936e7fecc93c362e7b"
+content-hash = "741cacac33b21b48174e5b2d99e35b9ba7a43bcfbb329ea055a4ca9be6753895"

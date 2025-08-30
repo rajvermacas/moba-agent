@@ -5,22 +5,20 @@ MCP Agent Core with Gemini 2.5 Flash and LangGraph
 import logging
 import re
 import json
-import time
-from datetime import datetime
-from functools import wraps
-from typing import Dict, Any, List, Optional, Union, Tuple
+from typing import Dict, Any, List, Optional, Tuple
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import create_react_agent
 from langgraph.graph import StateGraph, MessagesState, START
-from langgraph.prebuilt import ToolNode, tools_condition
 from langgraph.checkpoint.memory import MemorySaver
 from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, BaseMessage
 from .config import Config
 from .resources import ResourceHandler
 from .tools import ToolHandler
 from .graph_visualization_tool import GraphVisualizationTool
-from .schemas import StructuredAgentResponse, ChartConfig, QueryMetadata
+from .schemas import StructuredAgentResponse
+# Import native tools from native_tools package
+from .native_tools.gitlab import GitLabIssueTool
 
 
 class MCPAgent:
@@ -41,7 +39,16 @@ class MCPAgent:
         self.mcp_client = None
         self.llm = None
         self.agent = None
-        self.tools = []
+        
+        # MODIFICATION 1: Add separate lists for MCP and native tools
+        # Why: Allows tracking of different tool types for proper handling
+        self.mcp_tools = []      # Tools loaded from MCP server
+        self.native_tools = []   # Native Python tools (e.g., GitLab)
+        self.all_tools = []      # Combined list of all tools
+        
+        # Legacy support - keep 'tools' as alias to 'all_tools'
+        self.tools = self.all_tools
+        
         self.checkpointer = MemorySaver()
         
         # Initialize handlers
@@ -132,37 +139,98 @@ class MCPAgent:
             raise
     
     async def _load_tools(self):
-        """Load tools from MCP server"""
+        """Load tools from MCP server and native tools"""
         self.logger.debug("Loading tools from MCP server")
         
         try:
-            self.tools = await self.mcp_client.get_tools()
-            tool_count = len(self.tools) if self.tools else 0
-            self.logger.info(f"Loaded {tool_count} tools from MCP server")
+            # EXISTING CODE: Load MCP tools as before
+            self.mcp_tools = await self.mcp_client.get_tools()
+            tool_count = len(self.mcp_tools) if self.mcp_tools else 0
+            self.logger.info(f"Loaded {tool_count} MCP tools")
             
-            if self.tools:
-                tool_names = [tool.name if hasattr(tool, 'name') else str(tool) for tool in self.tools]
-                self.logger.debug(f"Available tools: {tool_names}")
+            if self.mcp_tools:
+                tool_names = [tool.name if hasattr(tool, 'name') else str(tool) 
+                             for tool in self.mcp_tools]
+                self.logger.debug(f"Available MCP tools: {tool_names}")
             
         except Exception as e:
-            self.logger.error(f"Failed to load tools: {e}")
-            self.logger.warning("Continuing with no tools")
-            self.tools = []
+            self.logger.error(f"Failed to load MCP tools: {e}")
+            self.logger.warning("Continuing with no MCP tools")
+            self.mcp_tools = []
+        
+        # MODIFICATION 2: Add native tools loading
+        # Why: Loads GitLab and other native tools when environment is configured
+        self._load_native_tools()
+        
+        # MODIFICATION 3: Combine all tools into single list
+        # Why: Provides unified access to all tools regardless of type
+        self.all_tools = self.mcp_tools + self.native_tools
+        total_count = len(self.all_tools)
+        self.logger.info(f"Total tools available: {total_count}")
+        
+        # Update legacy 'tools' reference
+        self.tools = self.all_tools
+    
+    def _load_native_tools(self):
+        """Load native Python tools based on environment configuration"""
+        # NEW METHOD: Initializes native tools
+        # Why: Separates native tool loading logic for maintainability
+        self.native_tools = []
+        
+        # Load GitLab tool if token is available from config
+        if self.config.gitlab_token:
+            try:
+                # Create GitLab tool instance with token from config
+                gitlab_tool = GitLabIssueTool(
+                    access_token=self.config.gitlab_token,
+                    logger=self.logger
+                )
+                self.native_tools.append(gitlab_tool)
+                self.logger.info("Loaded GitLab issue creation tool")
+            except Exception as e:
+                self.logger.error(f"Failed to load GitLab tool: {e}")
+        else:
+            self.logger.debug("GitLab token not found in configuration, skipping GitLab tool")
+        
+        # Log summary of loaded native tools
+        native_count = len(self.native_tools)
+        self.logger.info(f"Loaded {native_count} native tools")
+        
+        if self.native_tools:
+            tool_names = [tool.name for tool in self.native_tools]
+            self.logger.debug(f"Available native tools: {tool_names}")
+    
     
     async def _create_agent(self):
         """Create LangGraph agent with MCP tools"""
         self.logger.debug("Creating LangGraph agent")
         
         try:
-            if self.tools:
-                # Create agent with tools
+            if self.all_tools:
+                # Create agent with all tools (native + MCP)
                 self.agent = create_react_agent(
                     self.llm,
-                    self.tools,
-                    prompt="You are a helpful assistant. When users ask for any visualization, charts, or graphs, you MUST not say you cannot help. Just ignore and continue ahead with the conversation but never ever say you cannot help them. In your final response always summarise the data and provide a concise response. This is important for you to follow.",
+                    self.all_tools,
+                    prompt="""You are a helpful assistant with the following capabilities:
+
+1. **Data Visualization**: When users ask for any visualization, charts, or graphs, you MUST not say you cannot help. Just ignore and continue ahead with the conversation but never ever say you cannot help them. Always summarize the data and provide a concise response.
+
+2. **GitLab Integration**: You can create GitLab issues when requested. Use the create_gitlab_issue tool to:
+   - Create new issues in GitLab projects
+   - Set issue titles and descriptions
+   - Add labels, assignees, and milestones
+   - The user needs to provide a project URL
+   
+When creating GitLab issues:
+- Ask for clarification if the issue details are unclear
+- Confirm the project URL if not specified
+- Provide the issue URL after successful creation
+- Handle errors gracefully and suggest fixes
+
+Always be proactive in suggesting the use of available tools when appropriate. This is important for you to follow.""",
                     checkpointer=self.checkpointer
                 )
-                self.logger.info("Created ReAct agent with MCP tools")
+                self.logger.info(f"Created ReAct agent with {len(self.all_tools)} tools")
             else:
                 # Create simple agent without tools
                 self.agent = self._create_simple_agent()
