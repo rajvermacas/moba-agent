@@ -21,7 +21,7 @@ from .constants import QUERY_TOOL_PATTERN, AGENT_RECURSION_LIMIT, AGENT_MAX_CONS
 # Import native tools from native_tools package
 from .native_tools.gitlab import GitLabIssueTool
 # Import and apply Gemini patch for finish_reason enum issue
-from .gemini_patch import apply_gemini_patch
+# from .gemini_patch import apply_gemini_patch
 
 
 class MCPAgent:
@@ -39,10 +39,10 @@ class MCPAgent:
         self.logger.info("Initializing MCP Agent with Gemini 2.5 Flash")
         
         # Apply Gemini patch for finish_reason enum issue
-        if apply_gemini_patch():
-            self.logger.info("Applied Gemini finish_reason patch successfully")
-        else:
-            self.logger.warning("Failed to apply Gemini patch, errors may occur with unrecognized enum values")
+        # if apply_gemini_patch():
+        #     self.logger.info("Applied Gemini finish_reason patch successfully")
+        # else:
+        #     self.logger.warning("Failed to apply Gemini patch, errors may occur with unrecognized enum values")
         
         # Initialize components
         self.mcp_client = None
@@ -69,9 +69,6 @@ class MCPAgent:
         
         # Track initialization state
         self._initialized = False
-        
-        # Track which threads have had resources injected
-        self._thread_resources_injected = {}
     
     async def initialize(self):
         """Initialize the agent asynchronously"""
@@ -347,57 +344,68 @@ class MCPAgent:
                                 state['tool_error_counts'][msg.name] = 0
                 
                 # Check if we need to format visualization response
-                if state.get("visualization_decision") and not state.get("visualization_formatted"):
-                    viz = state["visualization_decision"]
-                    if viz.should_visualize and viz.chart_config:
-                        # Format user-friendly message
-                        response = f"I've created a {viz.chart_config.chart_type} chart "
-                        if viz.chart_config.title:
-                            response += f"titled '{viz.chart_config.title}' "
-                        response += "to visualize the data. "
-                        response += viz.content if viz.content else "The chart shows the query results clearly."
-                    else:
-                        response = viz.content or "Based on the data analysis, no visualization is needed."
+                # if state.get("visualization_decision") and not state.get("visualization_formatted"):
+                #     viz = state["visualization_decision"]
+                #     if viz.should_visualize and viz.chart_config:
+                #         # Format user-friendly message
+                #         response = f"I've created a {viz.chart_config.chart_type} chart "
+                #         if viz.chart_config.title:
+                #             response += f"titled '{viz.chart_config.title}' "
+                #         response += "to visualize the data. "
+                #         response += viz.content if viz.content else "The chart shows the query results clearly."
+                #     else:
+                #         response = viz.content or "Based on the data analysis, no visualization is needed."
                     
-                    state["visualization_formatted"] = True
-                    return {"messages": [AIMessage(content=response)]}
+                #     state["visualization_formatted"] = True
+                #     return {"messages": [AIMessage(content=response)]}
                 
-                # Add system prompt if not present
+                # Add system prompt and resources if not present
                 if not messages or not isinstance(messages[0], SystemMessage):
                     self.logger.debug(f"[DEBUG] Adding system prompt to messages")
+                    
                     system_prompt = """You are a helpful assistant with the following capabilities:
 
-1. **Data Visualization**: You can create interactive charts and graphs from query results. When users ask for visualizations:
-   - Execute the appropriate database query using available tools
-   - The system will automatically analyze the results and generate appropriate visualizations
-   - Summarize the data insights along with the visualization
-   - Suggest the most suitable chart types based on the data characteristics
+                        1. **Data Visualization**: You can create interactive charts and graphs from query results. When users ask for visualizations:
+                        - Execute the appropriate database query using available tools
+                        - The system will automatically analyze the results and generate appropriate visualizations
+                        - Summarize the data insights along with the visualization
+                        - Suggest the most suitable chart types based on the data characteristics
 
-2. **Database Queries**: You have access to execute_query_* tools to retrieve data from various databases. Use these tools to:
-   - Fetch data for analysis
-   - Answer questions about the data
-   - Prepare datasets for visualization
+                        2. **Database Queries**: You have access to execute_query_* tools to retrieve data from various databases. Use these tools to:
+                        - Fetch data for analysis
+                        - Answer questions about the data
+                        - Prepare datasets for visualization
 
-3. **GitLab Integration**: You can create GitLab issues when requested. Use the create_gitlab_issue tool to:
-   - Create new issues in GitLab projects
-   - Set issue titles and descriptions
-   - Add labels, assignees, and milestones
-   - The user needs to provide a project URL
-   
-When creating GitLab issues:
-- Ask for clarification if the issue details are unclear
-- Confirm the project URL if not specified
-- Provide the issue URL after successful creation
-- Handle errors gracefully and suggest fixes
+                        3. **GitLab Integration**: You can create GitLab issues when requested. Use the create_gitlab_issue tool to:
+                        - Create new issues in GitLab projects
+                        - Set issue titles and descriptions
+                        - Add labels, assignees, and milestones
+                        - The user needs to provide a project URL
+                        
+                        When creating GitLab issues:
+                        - Ask for clarification if the issue details are unclear
+                        - Confirm the project URL if not specified
+                        - Provide the issue URL after successful creation
+                        - Handle errors gracefully and suggest fixes
 
-**IMPORTANT INSTRUCTION**: When users ask for data, analysis, or information that requires database queries:
-- IMMEDIATELY use the appropriate execute_query_* tool to fetch the data
-- Do NOT show SQL queries to the user unless they explicitly ask to see the query
-- Execute queries directly and show the results
-- If a user asks something like "show top products by sales", directly execute the query using execute_query_mherb or the appropriate tool
+                        **IMPORTANT INSTRUCTION**: When users ask for data, analysis, or information that requires database queries:
+                        - IMMEDIATELY use the appropriate execute_query_* tool to fetch the data
+                        - Do NOT show SQL queries to the user unless they explicitly ask to see the query
+                        - Execute queries directly and show the results
+                        - If a user asks something like "show top products by sales", directly execute the query using execute_query_mherb or the appropriate tool
 
-Always be proactive in using available tools. When data is retrieved, consider if a visualization would help the user better understand the results."""
-                    messages = [SystemMessage(content=system_prompt)] + messages
+                        Always be proactive in using available tools. When data is retrieved, consider if a visualization would help the user better understand the results."""
+                    
+                    # Prepare messages with system prompt and resources
+                    messages_to_prepend = [SystemMessage(content=system_prompt)]
+
+                    # Get resources context for injection
+                    resources_context = await self._format_resources_context()
+                    if resources_context:
+                        messages_to_prepend.append(resources_context)
+                        self.logger.info("Injected MCP resources context into agent messages")
+                    
+                    messages = messages_to_prepend + messages
                 
                 # DEBUG: Log the tools available to the agent
                 self.logger.debug(f"[DEBUG] Agent invoking LLM with {len(self.all_tools)} tools available")
@@ -580,45 +588,6 @@ Always be proactive in using available tools. When data is retrieved, consider i
         except Exception as e:
             self.logger.error(f"Failed to format resources context: {e}", exc_info=True)
             return None
-    
-    # ============================================================================
-    # Message Preparation Methods
-    # ============================================================================
-    
-    
-    async def _prepare_messages_for_thread(self, message: str, thread_id: str) -> List[BaseMessage]:
-        """
-        Prepare messages list for agent invocation, including thread-specific setup.
-        
-        Args:
-            message: User message to process
-            thread_id: Thread identifier for conversation context
-            
-        Returns:
-            List of messages ready for agent invocation
-        """
-        self.logger.debug(f"Preparing messages for thread: {thread_id}")
-        messages = []
-        
-        # Check if this is the first message for this thread
-        if thread_id not in self._thread_resources_injected:
-            # Note: Visualization decisions are now handled via structured output
-            # No need for text-based marker instructions anymore
-            
-            # Inject resources context on first message
-            resources_context = await self._format_resources_context()
-            if resources_context:
-                messages.append(resources_context)
-                self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
-            
-            # Mark thread as having resources injected
-            self._thread_resources_injected[thread_id] = True
-        
-        # Add the user message
-        input_message = HumanMessage(content=message)
-        messages.append(input_message)
-        
-        return messages
     
     # ============================================================================
     # Response Processing Methods
@@ -868,8 +837,8 @@ Always be proactive in using available tools. When data is retrieved, consider i
         self.logger.debug(f"Invoking agent with query tracking for message: {message[:100]}...")
         
         try:
-            # Step 1: Prepare messages for the thread
-            messages = await self._prepare_messages_for_thread(message, thread_id)
+            # Step 1: Create user message
+            messages = [HumanMessage(content=message)]
             
             # Step 2: Invoke the agent with extended state
             config = {"configurable": {"thread_id": thread_id}}
@@ -957,23 +926,8 @@ Always be proactive in using available tools. When data is retrieved, consider i
         self.logger.debug(f"Streaming agent response for: {message[:100]}...")
         
         try:
-            # Prepare messages list
-            messages = []
-            
-            # Check if this is the first message for this thread
-            if thread_id not in self._thread_resources_injected:
-                # Inject resources context on first message
-                resources_context = await self._format_resources_context()
-                if resources_context:
-                    messages.append(resources_context)
-                    self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
-                
-                # Mark thread as having resources injected
-                self._thread_resources_injected[thread_id] = True
-            
-            # Add the user message
-            input_message = HumanMessage(content=message)
-            messages.append(input_message)
+            # Create user message
+            messages = [HumanMessage(content=message)]
             
             config = {"configurable": {"thread_id": thread_id}}
             
