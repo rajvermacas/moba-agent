@@ -57,11 +57,11 @@ The current implementation has two separate invocation patterns:
 
 ## Architectural Decision
 
-### Chosen Approach: Single Agent with Visualization Node
+### Chosen Approach: Custom Agent with Visualization Node
 
 After comprehensive research comparing multi-agent vs single-agent architectures, we've decided to:
 
-**Extend the existing ReAct agent by adding a visualization node to its graph**
+**Build a custom agent from scratch with a visualization node for full control over the flow**
 
 ### Rationale
 
@@ -159,7 +159,7 @@ async def visualization_node(state: ExtendedAgentState) -> ExtendedAgentState:
     
     try:
         # Invoke structured LLM for visualization decision
-        structured_response = await self.llm_structured.ainvoke(enhanced_messages)
+        structured_response = await self.llm_for_visualization.ainvoke(enhanced_messages)
         
         # Log decision
         self.logger.info(f"Visualization decision - Should visualize: {structured_response.should_visualize}")
@@ -169,11 +169,8 @@ async def visualization_node(state: ExtendedAgentState) -> ExtendedAgentState:
         # Store in state for downstream use
         state["visualization_decision"] = structured_response
         
-        # Create AIMessage for conversation continuity
-        decision_message = AIMessage(
-            content=f"Visualization analysis complete. Decision: {structured_response.reasoning}"
-        )
-        state["messages"].append(decision_message)
+        # Important: Do NOT add messages here - let the agent format the response
+        # The agent will see this decision and create a user-friendly message
         
     except Exception as e:
         self.logger.error(f"Visualization node failed: {e}", exc_info=True)
@@ -234,7 +231,7 @@ def route_after_agent(state: ExtendedAgentState) -> str:
     return "end"
 
 # IMPORTANT: Tools MUST route back to agent (not to visualization)
-# The flow is: agent → tools → agent → visualization (if needed) → end
+# The flow is: agent → tools → agent → visualization (if needed) → agent → end
 ```
 
 #### 4. Custom Agent Implementation
@@ -507,6 +504,70 @@ async def agent_node(state: ExtendedAgentState):
 - ✅ ReAct pattern fully preserved
 - ✅ Agent provides insights, not just raw data
 
+## Stale Code Cleanup
+
+After implementing the visualization node architecture, the following code becomes obsolete and should be removed:
+
+### 1. Methods to Remove
+
+#### `_get_structured_response` Method (Lines 640-713)
+```python
+# REMOVE: Entire method - replaced by visualization node
+async def _get_structured_response(self, messages: List[BaseMessage], 
+                                  query_result: Optional[Dict] = None,
+                                  thread_id: str = "default") -> StructuredAgentResponse:
+    # ... 74 lines of code to remove ...
+```
+
+### 2. Properties to Modify
+
+#### `self.llm_structured` Property
+```python
+# Line 127-129: Keep for visualization node but rename
+# FROM:
+self.llm_structured = base_llm.with_structured_output(
+    StructuredAgentResponse
+)
+
+# TO (clearer naming):
+self.llm_for_visualization = base_llm.with_structured_output(
+    StructuredAgentResponse
+)
+# This is still needed by the visualization node
+```
+
+### 3. Code Blocks to Refactor
+
+#### In `invoke_with_query_tracking` Method (Lines 776-802)
+```python
+# BEFORE: Direct structured response invocation
+if query_result:
+    structured_resp = await self._get_structured_response(
+        messages=all_messages,
+        query_result=query_result
+    )
+    # ... visualization handling ...
+
+# AFTER: Access from agent state
+if response.get("visualization_decision"):
+    structured_resp = response["visualization_decision"]
+    # ... same visualization handling ...
+```
+
+### 4. Import Cleanup
+
+```python
+# No imports need removal - all are still used
+# StructuredAgentResponse still needed for visualization node
+```
+
+### 5. Total Impact Summary
+
+- **Lines to Remove**: ~120 lines
+- **Lines to Modify**: ~50 lines
+- **Test Lines to Update**: ~174 lines
+- **Net Reduction**: ~70 lines (cleaner architecture)
+
 ## Migration Strategy
 
 ### Phase 1: Preparation (Non-Breaking)
@@ -646,10 +707,10 @@ def test_visualization_node():
 def test_routing_logic():
     """Test routing decisions"""
     state_with_query = create_state_with_query_result()
-    assert route_after_tools(state_with_query) == "visualize"
+    assert route_after_agent(state_with_query) == "visualize"
     
     state_without_query = create_state_without_query()
-    assert route_after_tools(state_without_query) == "agent"
+    assert route_after_agent(state_without_query) == "end"
 ```
 
 ### Integration Tests
@@ -702,7 +763,7 @@ def test_memory_persistence():
 
 ## Conclusion
 
-The single-agent-with-visualization-node architecture provides the optimal balance of simplicity, performance, and functionality for our use case. By extending the existing ReAct agent rather than creating a separate agent, we maintain a clean architecture while adding powerful visualization capabilities with full memory coherence.
+The custom-agent-with-visualization-node architecture provides the optimal balance of simplicity, performance, and functionality for our use case. By building a custom agent from scratch rather than wrapping `create_react_agent`, we maintain full control over the flow while adding powerful visualization capabilities with full memory coherence.
 
 This approach aligns with LangGraph best practices and positions us well for future enhancements while keeping the codebase maintainable and performant.
 
@@ -734,6 +795,6 @@ This approach aligns with LangGraph best practices and positions us well for fut
    - Add routing functions
    - Modify `_create_agent` method
    - Update `invoke_with_query_tracking` method
-   - Update `_get_structured_response` method
+   - Remove `_get_structured_response` method (replaced by visualization node)
 
 No other files require modification.
