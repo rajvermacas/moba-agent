@@ -5,14 +5,15 @@ MCP Agent Core with Gemini 2.5 Flash and LangGraph
 import logging
 import re
 import json
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_google_genai import ChatGoogleGenerativeAI
 from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.checkpoint.memory import MemorySaver
 from langgraph.types import RetryPolicy
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, BaseMessage
+from langchain_core.runnables.config import RunnableConfig
 from .config import Config
 from .resources import ResourceHandler
 from .tools import ToolHandler
@@ -32,8 +33,8 @@ from .native_tools.gitlab import GitLabIssueTool
 
 class AgentState(MessagesState):
     """Custom state that includes visualization data"""
-    graph_data: Optional[Dict[str, Any]] = None
-    query_result: Optional[Dict[str, Any]] = None
+    graph_data: Optional[Dict[str, Any]]
+    query_result: Optional[Dict[str, Any]]
 
 
 class MCPAgent:
@@ -165,6 +166,12 @@ class MCPAgent:
         
         try:
             # EXISTING CODE: Load MCP tools as before
+            # Fix: Add null check for mcp_client before calling get_tools
+            if self.mcp_client is None:
+                self.logger.error("Cannot load tools: MCP client is not initialized")
+                self.mcp_tools = []
+                return
+            
             self.mcp_tools = await self.mcp_client.get_tools()
             tool_count = len(self.mcp_tools) if self.mcp_tools else 0
             self.logger.info(f"Loaded {tool_count} MCP tools")
@@ -237,28 +244,48 @@ class MCPAgent:
         query_result = None
         query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
         
-        # Find the index of the latest HumanMessage
+        # Find the index of the 5th most recent HumanMessage
         latest_human_msg_index = -1
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], HumanMessage):
-                latest_human_msg_index = i
-                break
+        # human_msg_count = 0
+        # for i in range(len(messages) - 1, -1, -1):
+        #     if isinstance(messages[i], HumanMessage):
+        #         # human_msg_count += 1
+        #         # if human_msg_count == 5:
+        #             # latest_human_msg_index = i
+        #             # break
+        #         latest_human_msg_index = i
+        #         break
         
         # If we found a HumanMessage, look for ToolMessages after it
-        if latest_human_msg_index >= 0:
-            for i in range(latest_human_msg_index + 1, len(messages)):
-                msg = messages[i]
-                if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
-                    # Skip error messages
-                    if hasattr(msg, 'status') and msg.status == 'error':
-                        continue
-                    try:
-                        result = json.loads(msg.content)
+        # if latest_human_msg_index >= 0:
+        for i in range(latest_human_msg_index + 1, len(messages)):
+            msg = messages[i]
+            # Fix: Add null check for msg.name before regex match
+            if isinstance(msg, ToolMessage) and msg.name and query_tool_pattern.match(msg.name):
+                # Skip error messages
+                if hasattr(msg, 'status') and msg.status == 'error':
+                    continue
+                try:
+                    # Fix: Handle both string and list content types
+                    content = msg.content
+                    if isinstance(content, list):
+                        # If content is a list, try to find a valid JSON string in it
+                        for item in content:
+                            if isinstance(item, str):
+                                try:
+                                    result = json.loads(item)
+                                    if result.get("rows") and len(result["rows"]) > 0:
+                                        query_result = result
+                                        break
+                                except (json.JSONDecodeError, TypeError):
+                                    continue
+                    elif isinstance(content, str):
+                        result = json.loads(content)
                         if result.get("rows") and len(result["rows"]) > 0:
                             query_result = result
                             # Continue to get the last query result after HumanMessage
-                    except (json.JSONDecodeError, TypeError):
-                        pass
+                except (json.JSONDecodeError, TypeError):
+                    pass
         
         if query_result:
             self.logger.info("Query result captured successfully (after latest HumanMessage)")
@@ -267,75 +294,90 @@ class MCPAgent:
     
     async def _visualization_node(self, state: AgentState) -> AgentState:
         """
-        Analyze conversation and query results for visualization needs.
+        Analyze conversation history for visualization needs.
         
         This node:
-        1. Examines the conversation history
-        2. Analyzes any query results from tool messages
+        1. Takes the last 10 messages from conversation history
+        2. Analyzes the context for potential visualization opportunities
         3. Makes structured decisions about visualization
-        4. Appends a visualization instruction message if needed
+        4. Generates visualization if needed
         """
         # Log memory access for debugging
         self.logger.debug(f"[MEMORY_ACCESS] Agent: visualization_node, Action: analyzing")
         
-        # Prepare enhanced messages with system context
-        messages = state["messages"]
-        enhanced_messages = [SystemMessage(content=VISUALIZATION_SYSTEM_PROMPT)] + messages
+        # Prepare enhanced messages with system context and last 10 messages
+        messages = state["messages"][2:]
+        # last_10_messages = messages[-10:] if len(messages) >= 10 else messages
+        # enhanced_messages = [SystemMessage(content=VISUALIZATION_SYSTEM_PROMPT)] + last_10_messages
+        messages.append(HumanMessage(content=VISUALIZATION_SYSTEM_PROMPT))
         
-        # Extract query result that comes after the latest HumanMessage
-        query_result = self._extract_latest_query_result(messages)
-        
-        # Add query result context if available
-        if query_result:
-            result_summary = self._format_query_result_summary(query_result)
-            enhanced_messages.append(SystemMessage(content=result_summary))
-        
-            try:
-                # Invoke structured LLM for visualization decision
-                structured_response = await self.llm_for_visualization.ainvoke(enhanced_messages)
+        try:
+            # Invoke structured LLM for visualization decision
+            structured_response = await self.llm_for_visualization.ainvoke(messages)
+            
+            # Log decision
+            self.logger.info(f"Visualization decision - Should visualize: {getattr(structured_response, 'should_visualize', False)}")
+            
+            # Check if visualization is needed
+            should_visualize = getattr(structured_response, 'should_visualize', False)
+            chart_config = getattr(structured_response, 'chart_config', None)
+            
+            if should_visualize and chart_config:
+                self.logger.info(f"Chart type selected: {getattr(chart_config, 'chart_type', 'unknown')}")
                 
-                # Log decision
-                self.logger.info(f"Visualization decision - Should visualize: {structured_response.should_visualize}")
-                if structured_response.should_visualize and structured_response.chart_config:
-                    self.logger.info(f"Chart type selected: {structured_response.chart_config.chart_type}")
-                    
-                    # Format user-friendly response
-                    viz_config = structured_response.chart_config.model_dump()
-                    response = f"I've created a {structured_response.chart_config.chart_type} chart "
-                    if structured_response.chart_config.title:
-                        response += f"titled '{structured_response.chart_config.title}' "
-                    response += "to visualize the data. "
-                    response += structured_response.content if structured_response.content else "The chart shows the query results clearly."
-                    
-                    # Generate the actual visualization
-                    graph_data = None
-                    if query_result and self.graph_viz_tool:
-                        try:
-                            graph_data = await self._handle_visualization_with_config(
-                                query_result,
-                                viz_config,
-                                "default"
-                            )
-                            self.logger.info("Visualization generated successfully")
-                        except Exception as e:
-                            self.logger.error(f"Visualization generation failed: {e}")
-                    
-                    # Return complete message with visualization data in state
-                    return {
-                        "messages": [AIMessage(content=response)],
-                        "graph_data": graph_data,
-                        "query_result": query_result
-                    }
-                else:
-                    # No visualization needed, just return the content
-                    return {"messages": [AIMessage(content=structured_response.content)]}
+                # Extract query result for visualization
+                query_result = self._extract_latest_query_result(messages)
                 
-            except Exception as e:
-                self.logger.error(f"Visualization node failed: {e}", exc_info=True)
-                # Return error message
-                return {"messages": [AIMessage(content="I encountered an error while analyzing visualization needs.")]}
-            finally:
-                self.logger.debug(f"[MEMORY_COMPLETE] Agent: visualization_node")
+                # Format user-friendly response
+                viz_config = chart_config.model_dump() if hasattr(chart_config, 'model_dump') else {}
+                chart_type = getattr(chart_config, 'chart_type', 'chart')
+                title = getattr(chart_config, 'title', None)
+                
+                response = f"I've analyzed and created a {chart_type} "
+                if title:
+                    response += f"titled '{title}' "
+                response += "to visualize the relevant data. "
+                
+                content = getattr(structured_response, 'content', '')
+                response += content if content else "The visualization shows the conversation data clearly."
+                
+                # Generate the actual visualization if we have query results
+                graph_data = None
+                if query_result and self.graph_viz_tool:
+                    try:
+                        graph_data = await self._handle_visualization_with_config(
+                            query_result,
+                            viz_config,
+                            "default"
+                        )
+                        self.logger.info("Visualization generated successfully")
+                    except Exception as e:
+                        self.logger.error(f"Visualization generation failed: {e}")
+                
+                return {
+                    "messages": [],
+                    "graph_data": graph_data,
+                    "query_result": query_result
+                }
+            else:
+                # No visualization needed, just return the content
+                content = getattr(structured_response, 'content', 'No visualization needed for this conversation.')
+                return {
+                    "messages": [AIMessage(content=content)],
+                    "graph_data": None,
+                    "query_result": None
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Visualization node failed: {e}", exc_info=True)
+            # Return error message with proper state structure
+            return {
+                "messages": [AIMessage(content="I encountered an error while analyzing visualization needs.")],
+                "graph_data": None,
+                "query_result": None
+            }
+        finally:
+            self.logger.debug(f"[MEMORY_COMPLETE] Agent: visualization_node")
     
     def _format_query_result_summary(self, query_result: Dict[str, Any]) -> str:
         """Format query result summary for context"""
@@ -352,9 +394,12 @@ class MCPAgent:
         
         try:
             # CRITICAL: Bind tools to the LLM so it knows how to use them
-            if self.all_tools:
+            if self.all_tools and self.llm is not None:
                 self.llm = self.llm.bind_tools(self.all_tools)
                 self.logger.info(f"Bound {len(self.all_tools)} tools to LLM")
+            elif self.llm is None:
+                self.logger.error("Cannot bind tools: LLM is not initialized")
+                raise ValueError("LLM must be initialized before binding tools")
             
             # Create retry policy for tool execution (3 attempts)
             retry_policy = RetryPolicy(max_attempts=3)
@@ -390,11 +435,17 @@ class MCPAgent:
                         break
                 self.logger.debug(f"[DEBUG] Last user message: {last_human_msg}")
                 
+                # Fix: Add null check for LLM before calling ainvoke
+                if self.llm is None:
+                    self.logger.error("Cannot invoke LLM: LLM is not initialized")
+                    raise ValueError("LLM must be initialized before invoking")
+                
                 response = await self.llm.ainvoke(messages)
                 
                 # DEBUG: Log what the agent decided
                 self.logger.debug(f"[DEBUG] Agent response type: {type(response)}")
-                if hasattr(response, 'tool_calls'):
+                # Fix: Check if response is AIMessage before accessing tool_calls
+                if isinstance(response, AIMessage) and hasattr(response, 'tool_calls'):
                     self.logger.debug(f"[DEBUG] Agent tool_calls: {response.tool_calls}")
                 if hasattr(response, 'content'):
                     self.logger.debug(f"[DEBUG] Agent content preview: {response.content[:200] if response.content else 'None'}")
@@ -424,7 +475,8 @@ class MCPAgent:
                 # After tools, check if we need visualization
                 query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
                 for msg in reversed(state["messages"][-10:] if len(state["messages"]) > 10 else state["messages"]):
-                    if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
+                    # Fix: Add null check for msg.name before regex match
+                    if isinstance(msg, ToolMessage) and msg.name and query_tool_pattern.match(msg.name):
                         # Skip error messages
                         if hasattr(msg, 'status') and msg.status == 'error':
                             continue
@@ -437,8 +489,23 @@ class MCPAgent:
                         )
                         if not has_viz_after:
                             try:
-                                result = json.loads(msg.content)
-                                if result.get("rows") and len(result["rows"]) > 0:
+                                # Fix: Handle both string and list content types
+                                content = msg.content
+                                result = None
+                                if isinstance(content, list):
+                                    # If content is a list, try to find a valid JSON string in it
+                                    for item in content:
+                                        if isinstance(item, str):
+                                            try:
+                                                result = json.loads(item)
+                                                if result.get("rows") and len(result["rows"]) > 0:
+                                                    break
+                                            except (json.JSONDecodeError, TypeError):
+                                                continue
+                                elif isinstance(content, str):
+                                    result = json.loads(content)
+                                
+                                if result and result.get("rows") and len(result["rows"]) > 0:
                                     self.logger.debug("[DEBUG] Found query result, routing to visualization")
                                     return "visualize"
                             except (json.JSONDecodeError, TypeError):
@@ -663,8 +730,10 @@ class MCPAgent:
             # Try using GraphVisualizationTool first if available
             if self.graph_viz_tool:
                 try:
+                    # Fix: Convert query_result Dict to JSON string as expected by arun
+                    query_results_str = json.dumps(query_result) if isinstance(query_result, dict) else str(query_result)
                     viz_result = await self.graph_viz_tool.arun(
-                        query_results=query_result,
+                        query_results=query_results_str,
                         thread_id=thread_id,
                         chart_config=chart_config
                     )
@@ -757,7 +826,13 @@ class MCPAgent:
             # Prepare messages with system prompt and resources
             messages = await self._prepare_messages(message, thread_id)
             
-            config = {"configurable": {"thread_id": thread_id}}
+            # Fix: Properly type config for RunnableConfig
+            config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+            
+            # Fix: Add null check for agent before calling ainvoke
+            if self.agent is None:
+                self.logger.error("Cannot invoke agent: Agent is not initialized")
+                raise ValueError("Agent must be initialized before invoking")
             
             response = await self.agent.ainvoke(
                 {"messages": messages},
@@ -821,7 +896,13 @@ class MCPAgent:
             # Create user message
             messages = [HumanMessage(content=message)]
             
-            config = {"configurable": {"thread_id": thread_id}}
+            # Fix: Properly type config for RunnableConfig
+            config: RunnableConfig = {"configurable": {"thread_id": thread_id}}
+            
+            # Fix: Add null check for agent before calling astream
+            if self.agent is None:
+                self.logger.error("Cannot stream from agent: Agent is not initialized")
+                raise ValueError("Agent must be initialized before streaming")
             
             # Stream from agent
             async for chunk in self.agent.astream(

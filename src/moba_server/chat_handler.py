@@ -105,7 +105,19 @@ class ChatCompletionHandler:
             )
             
             # Extract response, query result, AND graph data
-            response_content = agent_result.get("response", "")
+            raw_response = agent_result.get("response", "")
+            
+            # Fix: Ensure response_content is always a string for ChatMessage validation
+            if isinstance(raw_response, list):
+                # If response is a list, join it into a string
+                response_content = " ".join(str(item) for item in raw_response if item)
+                if not response_content:  # If all items were empty
+                    response_content = "I've processed your request."
+            elif isinstance(raw_response, str):
+                response_content = raw_response
+            else:
+                # Handle any other types by converting to string
+                response_content = str(raw_response) if raw_response else "I've processed your request."
             raw_query_result = agent_result.get("query_result")
             graph_data = agent_result.get("graph")  # NEW: Extract graph data
             
@@ -172,6 +184,7 @@ class ChatCompletionHandler:
             
         except Exception as e:
             logger.error(f"Error processing chat completion: {str(e)}")
+            logger.exception(e)
             
             # Return error response in OpenAI format
             error_message = f"I encountered an error processing your request: {str(e)}"
