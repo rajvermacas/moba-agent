@@ -428,10 +428,6 @@ class MCPAgent:
                 """Main agent reasoning node - simple LLM invocation with tools"""
                 messages = state["messages"]
                 
-                # Clear previous visualization data at the start of each agent invocation
-                state["graph_data"] = None
-                state["query_result"] = None
-                
                 # DEBUG: Log the tools available to the agent
                 self.logger.debug(f"[DEBUG] Agent invoking LLM with {len(self.all_tools)} tools available")
                 if self.all_tools:
@@ -458,7 +454,11 @@ class MCPAgent:
                 if hasattr(response, 'content'):
                     self.logger.debug(f"[DEBUG] Agent content preview: {response.content[:200] if response.content else 'None'}")
                 
-                return {"messages": [response]}
+                return {
+                    "messages": [response],
+                    "graph_data": None,
+                    "query_result": None
+                }
             
             # Define routing logic  
             def route_after_agent(state: AgentState) -> str:
@@ -756,6 +756,39 @@ class MCPAgent:
     # Main Public Method
     # ============================================================================
     
+    async def _prepare_messages(self, message: str, thread_id: str) -> List:
+        """
+        Prepare messages for agent invocation.
+        
+        Args:
+            message: User message to process
+            thread_id: Thread ID for conversation context
+            
+        Returns:
+            List of messages with system prompt and resources context if needed
+        """
+        messages = []
+        
+        # Check if this is the first message for this thread
+        if thread_id not in self._thread_resources_injected:
+            # Always add the main system prompt at the beginning of a thread
+            system_prompt = SystemMessage(content=self._get_agent_system_prompt())
+            messages.append(system_prompt)
+
+            # Inject resources context after system prompt
+            resources_context = await self._format_resources_context()
+            if resources_context:
+                messages.append(resources_context)
+                self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
+            
+            # Mark thread as having resources injected
+            self._thread_resources_injected[thread_id] = True
+        
+        # Add the user message
+        messages.append(HumanMessage(content=message))
+        
+        return messages
+    
     async def invoke(self, message: str, thread_id: str = "default") -> Dict[str, Any]:
         """
         Invoke the agent with a message.
@@ -776,26 +809,8 @@ class MCPAgent:
         self.logger.debug(f"Invoking agent with message: {message[:100]}...")
         
         try:
-            # Prepare messages list with system prompt first
-            messages = []
-            
-            # Always add the main system prompt at the beginning
-            system_prompt = SystemMessage(content=self._get_agent_system_prompt())
-            messages.append(system_prompt)
-            
-            # Check if this is the first message for this thread
-            if thread_id not in self._thread_resources_injected:
-                # Inject resources context after system prompt
-                resources_context = await self._format_resources_context()
-                if resources_context:
-                    messages.append(resources_context)
-                    self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
-                
-                # Mark thread as having resources injected
-                self._thread_resources_injected[thread_id] = True
-            
-            # Add the user message
-            messages.append(HumanMessage(content=message))
+            # Prepare messages with system prompt and resources
+            messages = await self._prepare_messages(message, thread_id)
             
             config = {"configurable": {"thread_id": thread_id}}
             
@@ -819,16 +834,17 @@ class MCPAgent:
                     break
             
             # If query_result wasn't set in state, extract from tool messages
-            if not result["query_result"]:
-                query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
-                for msg in reversed(all_messages):
-                    if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
-                        if not (hasattr(msg, 'status') and msg.status == 'error'):
-                            try:
-                                result["query_result"] = json.loads(msg.content)
-                                break
-                            except (json.JSONDecodeError, TypeError):
-                                pass
+            # if not result["query_result"]:
+            #     query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
+            #     for msg in reversed(all_messages):
+            #         if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
+            #             if not (hasattr(msg, 'status') and msg.status == 'error'):
+            #                 try:
+            #                     result["query_result"] = json.loads(msg.content)
+            #                     break
+            #                 except (json.JSONDecodeError, TypeError):
+            #                     pass
+            
             self.logger.debug(
                 f"Agent response with query tracking completed. "
                 f"Query result present: {result['query_result'] is not None}, "
@@ -839,11 +855,6 @@ class MCPAgent:
         except Exception as e:
             self.logger.error(f"Failed to invoke agent with query tracking: {e}", exc_info=True)
             raise
-    
-    # Backward compatibility alias
-    async def invoke_with_query_tracking(self, message: str, thread_id: str = "default") -> Dict[str, Any]:
-        """Backward compatibility wrapper for invoke method"""
-        return await self.invoke(message, thread_id)
     
     async def stream(self, message: str, thread_id: str = "default"):
         """

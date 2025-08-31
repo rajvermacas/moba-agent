@@ -99,7 +99,7 @@ class ChatCompletionHandler:
             logger.info(f"Invoking MCPAgent with message: {message_content[:100]}...")
             
             # Call MCPAgent with query tracking
-            agent_result = await self.agent.invoke_with_query_tracking(
+            agent_result = await self.agent.invoke(
                 message=message_content,
                 thread_id=thread_id
             )
