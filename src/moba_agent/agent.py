@@ -18,7 +18,12 @@ from .resources import ResourceHandler
 from .tools import ToolHandler
 from .graph_visualization_tool import GraphVisualizationTool
 from .schemas import StructuredAgentResponse
-from .constants import QUERY_TOOL_PATTERN, AGENT_RECURSION_LIMIT
+from .constants import (
+    QUERY_TOOL_PATTERN, 
+    AGENT_RECURSION_LIMIT,
+    AGENT_SYSTEM_PROMPT,
+    VISUALIZATION_SYSTEM_PROMPT
+)
 # Import native tools from native_tools package
 from .native_tools.gitlab import GitLabIssueTool
 # Import and apply Gemini patch for finish_reason enum issue
@@ -275,8 +280,7 @@ class MCPAgent:
         
         # Prepare enhanced messages with system context
         messages = state["messages"]
-        system_prompt = self._get_visualization_system_prompt()
-        enhanced_messages = [SystemMessage(content=system_prompt)] + messages
+        enhanced_messages = [SystemMessage(content=VISUALIZATION_SYSTEM_PROMPT)] + messages
         
         # Extract query result that comes after the latest HumanMessage
         query_result = self._extract_latest_query_result(messages)
@@ -332,65 +336,6 @@ class MCPAgent:
                 return {"messages": [AIMessage(content="I encountered an error while analyzing visualization needs.")]}
             finally:
                 self.logger.debug(f"[MEMORY_COMPLETE] Agent: visualization_node")
-    
-    def _get_agent_system_prompt(self) -> str:
-        """Get the main system prompt for the agent"""
-        return """You are a helpful assistant with the following capabilities:
-
-        1. **Data Visualization**: You can create interactive charts and graphs from query results. When users ask for visualizations:
-        - Execute the appropriate database query using available tools
-        - The system will automatically analyze the results and generate appropriate visualizations
-        - Summarize the data insights along with the visualization
-        - Suggest the most suitable chart types based on the data characteristics
-
-        2. **Database Queries**: You have access to execute_query_* tools to retrieve data from various databases. Use these tools to:
-        - Fetch data for analysis
-        - Answer questions about the data
-        - Prepare datasets for visualization
-
-        3. **GitLab Integration**: You can create GitLab issues when requested. Use the create_gitlab_issue tool to:
-        - Create new issues in GitLab projects
-        - Set issue titles and descriptions
-        - Add labels, assignees, and milestones
-        - The user needs to provide a project URL
-        
-        When creating GitLab issues:
-        - Ask for clarification if the issue details are unclear
-        - Confirm the project URL if not specified
-        - Provide the issue URL after successful creation
-        - Handle errors gracefully and suggest fixes
-
-        **IMPORTANT INSTRUCTION**: When users ask for data, analysis, or information that requires database queries:
-        - IMMEDIATELY use the appropriate execute_query_* tool to fetch the data
-        - Do NOT show SQL queries to the user unless they explicitly ask to see the query
-        - Execute queries directly and show the results
-        - If a user asks something like "show top products by sales", directly execute the query using execute_query_mherb or the appropriate tool
-
-        Always be proactive in using available tools. When data is retrieved, consider if a visualization would help the user better understand the results."""
-    
-    def _get_visualization_system_prompt(self) -> str:
-        """Get the system prompt for visualization decisions"""
-        return """
-        Analyze the conversation and any database query results to determine:
-        1. Whether visualization is needed (should_visualize)
-        2. If yes, what chart configuration to use (chart_config)
-        3. Provide reasoning for your decisions
-        
-        Consider visualization when:
-        - Query results contain aggregated data
-        - User explicitly asks for charts/graphs/visualization
-        - Data shows trends, comparisons, or distributions
-        - Results would be clearer in visual format
-        - Try to always provide visualization (Mandatory)
-        
-        Choose appropriate chart types based on data characteristics:
-        - Bar/Column: Categorical comparisons
-        - Line: Trends over time
-        - Pie: Part-to-whole relationships
-        - Scatter: Correlations
-        - Heatmap: Matrix data
-        - Table: Detailed records
-        """
     
     def _format_query_result_summary(self, query_result: Dict[str, Any]) -> str:
         """Format query result summary for context"""
@@ -772,7 +717,7 @@ class MCPAgent:
         # Check if this is the first message for this thread
         if thread_id not in self._thread_resources_injected:
             # Always add the main system prompt at the beginning of a thread
-            system_prompt = SystemMessage(content=self._get_agent_system_prompt())
+            system_prompt = SystemMessage(content=AGENT_SYSTEM_PROMPT)
             messages.append(system_prompt)
 
             # Inject resources context after system prompt
