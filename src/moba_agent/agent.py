@@ -305,11 +305,9 @@ class MCPAgent:
         # Log memory access for debugging
         self.logger.debug(f"[MEMORY_ACCESS] Agent: visualization_node, Action: analyzing")
         
-        # Prepare enhanced messages with system context and last 10 messages
+        # Remove system prompts of the agent_node
         messages = state["messages"][2:]
-        # last_10_messages = messages[-10:] if len(messages) >= 10 else messages
-        # enhanced_messages = [SystemMessage(content=VISUALIZATION_SYSTEM_PROMPT)] + last_10_messages
-        messages.append(HumanMessage(content=VISUALIZATION_SYSTEM_PROMPT))
+        messages.insert(0, SystemMessage(content=VISUALIZATION_SYSTEM_PROMPT))
         
         try:
             # Invoke structured LLM for visualization decision
