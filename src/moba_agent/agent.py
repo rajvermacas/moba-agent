@@ -5,23 +5,30 @@ MCP Agent Core with Gemini 2.5 Flash and LangGraph
 import logging
 import re
 import json
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional
 from langchain_mcp_adapters.client import MultiServerMCPClient
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langgraph.prebuilt import create_react_agent, ToolNode
+from langgraph.prebuilt import ToolNode
 from langgraph.graph import StateGraph, MessagesState, START, END
 from langgraph.checkpoint.memory import MemorySaver
-from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage, BaseMessage
+from langgraph.types import RetryPolicy
+from langchain_core.messages import HumanMessage, AIMessage, SystemMessage, ToolMessage
 from .config import Config
 from .resources import ResourceHandler
 from .tools import ToolHandler
 from .graph_visualization_tool import GraphVisualizationTool
-from .schemas import StructuredAgentResponse, ExtendedAgentState
-from .constants import QUERY_TOOL_PATTERN, AGENT_RECURSION_LIMIT, AGENT_MAX_CONSECUTIVE_TOOL_ERRORS
+from .schemas import StructuredAgentResponse
+from .constants import QUERY_TOOL_PATTERN, AGENT_RECURSION_LIMIT
 # Import native tools from native_tools package
 from .native_tools.gitlab import GitLabIssueTool
 # Import and apply Gemini patch for finish_reason enum issue
 # from .gemini_patch import apply_gemini_patch
+
+
+class AgentState(MessagesState):
+    """Custom state that includes visualization data"""
+    graph_data: Optional[Dict[str, Any]] = None
+    query_result: Optional[Dict[str, Any]] = None
 
 
 class MCPAgent:
@@ -69,6 +76,9 @@ class MCPAgent:
         
         # Track initialization state
         self._initialized = False
+        
+        # Track which threads have had resources injected
+        self._thread_resources_injected: Dict[str, bool] = {}
     
     async def initialize(self):
         """Initialize the agent asynchronously"""
@@ -209,57 +219,119 @@ class MCPAgent:
             tool_names = [tool.name for tool in self.native_tools]
             self.logger.debug(f"Available native tools: {tool_names}")
     
-    async def _visualization_node(self, state: ExtendedAgentState) -> ExtendedAgentState:
+    def _extract_latest_query_result(self, messages: List) -> Optional[Dict[str, Any]]:
+        """
+        Extract the latest query result that comes after the most recent HumanMessage.
+        
+        Args:
+            messages: List of messages from the conversation
+            
+        Returns:
+            The query result dict if found, None otherwise
+        """
+        query_result = None
+        query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
+        
+        # Find the index of the latest HumanMessage
+        latest_human_msg_index = -1
+        for i in range(len(messages) - 1, -1, -1):
+            if isinstance(messages[i], HumanMessage):
+                latest_human_msg_index = i
+                break
+        
+        # If we found a HumanMessage, look for ToolMessages after it
+        if latest_human_msg_index >= 0:
+            for i in range(latest_human_msg_index + 1, len(messages)):
+                msg = messages[i]
+                if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
+                    # Skip error messages
+                    if hasattr(msg, 'status') and msg.status == 'error':
+                        continue
+                    try:
+                        result = json.loads(msg.content)
+                        if result.get("rows") and len(result["rows"]) > 0:
+                            query_result = result
+                            # Continue to get the last query result after HumanMessage
+                    except (json.JSONDecodeError, TypeError):
+                        pass
+        
+        if query_result:
+            self.logger.info("Query result captured successfully (after latest HumanMessage)")
+        
+        return query_result
+    
+    async def _visualization_node(self, state: AgentState) -> AgentState:
         """
         Analyze conversation and query results for visualization needs.
         
         This node:
         1. Examines the conversation history
-        2. Analyzes any query results
+        2. Analyzes any query results from tool messages
         3. Makes structured decisions about visualization
-        4. Persists decisions in agent state
+        4. Appends a visualization instruction message if needed
         """
         # Log memory access for debugging
-        thread_id = state.get("thread_id", "default")
-        self.logger.debug(f"[MEMORY_ACCESS] Agent: visualization_node, Thread: {thread_id}, Action: analyzing")
+        self.logger.debug(f"[MEMORY_ACCESS] Agent: visualization_node, Action: analyzing")
         
         # Prepare enhanced messages with system context
         messages = state["messages"]
         system_prompt = self._get_visualization_system_prompt()
         enhanced_messages = [SystemMessage(content=system_prompt)] + messages
         
+        # Extract query result that comes after the latest HumanMessage
+        query_result = self._extract_latest_query_result(messages)
+        
         # Add query result context if available
-        if state.get("query_result"):
-            result_summary = self._format_query_result_summary(state["query_result"])
+        if query_result:
+            result_summary = self._format_query_result_summary(query_result)
             enhanced_messages.append(SystemMessage(content=result_summary))
         
-        try:
-            # Invoke structured LLM for visualization decision
-            structured_response = await self.llm_for_visualization.ainvoke(enhanced_messages)
-            
-            # Log decision
-            self.logger.info(f"Visualization decision - Should visualize: {structured_response.should_visualize}")
-            if structured_response.should_visualize and structured_response.chart_config:
-                self.logger.info(f"Chart type selected: {structured_response.chart_config.chart_type}")
-            
-            # Store in state for downstream use
-            state["visualization_decision"] = structured_response
-            
-            # Important: Do NOT add messages here - let the agent format the response
-            # The agent will see this decision and create a user-friendly message
-            
-        except Exception as e:
-            self.logger.error(f"Visualization node failed: {e}", exc_info=True)
-            # Set default decision on error
-            state["visualization_decision"] = StructuredAgentResponse(
-                content="",
-                should_visualize=False,
-                chart_config=None,
-                reasoning="Error in visualization analysis"
-            )
-        
-        self.logger.debug(f"[MEMORY_COMPLETE] Agent: visualization_node, Thread: {thread_id}")
-        return state
+            try:
+                # Invoke structured LLM for visualization decision
+                structured_response = await self.llm_for_visualization.ainvoke(enhanced_messages)
+                
+                # Log decision
+                self.logger.info(f"Visualization decision - Should visualize: {structured_response.should_visualize}")
+                if structured_response.should_visualize and structured_response.chart_config:
+                    self.logger.info(f"Chart type selected: {structured_response.chart_config.chart_type}")
+                    
+                    # Format user-friendly response
+                    viz_config = structured_response.chart_config.model_dump()
+                    response = f"I've created a {structured_response.chart_config.chart_type} chart "
+                    if structured_response.chart_config.title:
+                        response += f"titled '{structured_response.chart_config.title}' "
+                    response += "to visualize the data. "
+                    response += structured_response.content if structured_response.content else "The chart shows the query results clearly."
+                    
+                    # Generate the actual visualization
+                    graph_data = None
+                    if query_result and self.graph_viz_tool:
+                        try:
+                            graph_data = await self._handle_visualization_with_config(
+                                query_result,
+                                viz_config,
+                                "default"
+                            )
+                            self.logger.info("Visualization generated successfully")
+                        except Exception as e:
+                            self.logger.error(f"Visualization generation failed: {e}")
+                    
+                    # Return complete message with visualization data in state
+                    return {
+                        "messages": [AIMessage(content=response)],
+                        "graph_data": graph_data,
+                        "query_result": query_result
+                    }
+                else:
+                    # No visualization needed, just return the content
+                    return {"messages": [AIMessage(content=structured_response.content)]}
+                
+            except Exception as e:
+                self.logger.error(f"Visualization node failed: {e}", exc_info=True)
+                # Return error message
+                return {"messages": [AIMessage(content="I encountered an error while analyzing visualization needs.")]}
+            finally:
+                self.logger.debug(f"[MEMORY_COMPLETE] Agent: visualization_node")
     
     def _get_visualization_system_prompt(self) -> str:
         """Get the system prompt for visualization decisions"""
@@ -304,7 +376,10 @@ class MCPAgent:
                 self.llm = self.llm.bind_tools(self.all_tools)
                 self.logger.info(f"Bound {len(self.all_tools)} tools to LLM")
             
-            workflow = StateGraph(ExtendedAgentState)
+            # Create retry policy for tool execution (3 attempts)
+            retry_policy = RetryPolicy(max_attempts=3)
+            
+            workflow = StateGraph(AgentState)
             
             # Create tool node using all available tools
             if self.all_tools:
@@ -313,51 +388,14 @@ class MCPAgent:
                 # Create a dummy tool node for consistency
                 tool_node = lambda state: state
             
-            # Create agent node with proper prompt and visualization formatting
-            async def agent_node(state: ExtendedAgentState):
-                """Main agent reasoning node - handles tools, errors, and visualization formatting"""
+            # Create simple agent node - just LLM invocation
+            async def agent_node(state: AgentState):
+                """Main agent reasoning node - simple LLM invocation with tools"""
                 messages = state["messages"]
                 
-                # Track consecutive errors per tool
-                if "tool_error_counts" not in state:
-                    state["tool_error_counts"] = {}
-                
-                # Check recent messages for tool errors
-                last_messages = messages[-2:] if len(messages) >= 2 else messages
-                for msg in last_messages:
-                    if isinstance(msg, ToolMessage):
-                        if hasattr(msg, 'status') and msg.status == 'error':
-                            # Increment error count for this tool
-                            tool_name = msg.name
-                            state['tool_error_counts'][tool_name] = state['tool_error_counts'].get(tool_name, 0) + 1
-                            
-                            # Check if we've hit the limit
-                            if state['tool_error_counts'][tool_name] >= AGENT_MAX_CONSECUTIVE_TOOL_ERRORS:
-                                # Stop retrying this tool
-                                error_response = f"I've tried {tool_name} {AGENT_MAX_CONSECUTIVE_TOOL_ERRORS} times but it keeps failing. "
-                                error_response += f"The last error was: {msg.content}. "
-                                error_response += "Let me try a different approach or please check the query."
-                                return {"messages": [AIMessage(content=error_response)]}
-                        else:
-                            # Success - reset error count for this tool
-                            if msg.name in state.get('tool_error_counts', {}):
-                                state['tool_error_counts'][msg.name] = 0
-                
-                # Check if we need to format visualization response
-                # if state.get("visualization_decision") and not state.get("visualization_formatted"):
-                #     viz = state["visualization_decision"]
-                #     if viz.should_visualize and viz.chart_config:
-                #         # Format user-friendly message
-                #         response = f"I've created a {viz.chart_config.chart_type} chart "
-                #         if viz.chart_config.title:
-                #             response += f"titled '{viz.chart_config.title}' "
-                #         response += "to visualize the data. "
-                #         response += viz.content if viz.content else "The chart shows the query results clearly."
-                #     else:
-                #         response = viz.content or "Based on the data analysis, no visualization is needed."
-                    
-                #     state["visualization_formatted"] = True
-                #     return {"messages": [AIMessage(content=response)]}
+                # Clear previous visualization data at the start of each agent invocation
+                state["graph_data"] = None
+                state["query_result"] = None
                 
                 # Add system prompt and resources if not present
                 if not messages or not isinstance(messages[0], SystemMessage):
@@ -435,15 +473,14 @@ class MCPAgent:
                 
                 return {"messages": [response]}
             
-            # Define routing logic
-            def route_after_agent(state: ExtendedAgentState) -> str:
-                """Route after agent - handles tools, visualization, and formatting"""
-                query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
-                
+            # Define routing logic  
+            def route_after_agent(state: AgentState) -> str:
+                """Route after agent - check if we need tools or visualization"""
                 last_message = state["messages"][-1]
                 
-                # If agent wants to call tools
+                # Check for tool calls first
                 if isinstance(last_message, AIMessage):
+                    # Standard tools_condition check
                     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
                         self.logger.debug(f"[DEBUG] Routing to tools - found {len(last_message.tool_calls)} tool calls")
                         for tc in last_message.tool_calls:
@@ -452,22 +489,25 @@ class MCPAgent:
                     else:
                         self.logger.debug(f"[DEBUG] No tool calls in AIMessage")
                 
-                # Check if we just came from visualization node
-                if state.get("visualization_decision") and state.get("visualization_formatted"):
-                    # Agent has formatted the response, we're done
-                    return "end"
-                
-                # Check if we need visualization (haven't done it yet)
-                if not state.get("visualization_decision"):
-                    for msg in reversed(state["messages"][-10:] if len(state["messages"]) > 10 else state["messages"]):
-                        if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
-                            # Skip error messages
-                            if hasattr(msg, 'status') and msg.status == 'error':
-                                continue
+                # After tools, check if we need visualization
+                query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
+                for msg in reversed(state["messages"][-10:] if len(state["messages"]) > 10 else state["messages"]):
+                    if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
+                        # Skip error messages
+                        if hasattr(msg, 'status') and msg.status == 'error':
+                            continue
+                        # Check if this is a fresh query result (not already visualized)
+                        # Look for any viz message after this tool message
+                        tool_msg_idx = state["messages"].index(msg)
+                        has_viz_after = any(
+                            isinstance(m, AIMessage) and m.additional_kwargs.get("should_visualize")
+                            for m in state["messages"][tool_msg_idx:]
+                        )
+                        if not has_viz_after:
                             try:
                                 result = json.loads(msg.content)
                                 if result.get("rows") and len(result["rows"]) > 0:
-                                    state["query_result"] = result
+                                    self.logger.debug("[DEBUG] Found query result, routing to visualization")
                                     return "visualize"
                             except (json.JSONDecodeError, TypeError):
                                 pass
@@ -477,32 +517,28 @@ class MCPAgent:
             # Add all nodes
             workflow.add_node("agent", agent_node)
             if self.all_tools:
-                workflow.add_node("tools", tool_node)
+                workflow.add_node("tools", tool_node, retry=retry_policy)
             workflow.add_node("visualize", self._visualization_node)
             
-            # Set up edges
+            # Set up edges - following the pattern: Agent -> Tools -> Agent -> Viz -> End
             workflow.set_entry_point("agent")
             
-            # CRITICAL EDGES:
+            # Tools always go back to agent
             if self.all_tools:
-                # 1. Tools ALWAYS route back to agent (for error handling and observation)
                 workflow.add_edge("tools", "agent")
             
-            # 2. Visualization ALWAYS routes back to agent (for formatting user response)
-            workflow.add_edge("visualize", "agent")
+            # Visualization goes directly to end
+            workflow.add_edge("visualize", END)
             
-            # 3. Agent is the central hub - decides all routing
-            edges = {
-                "visualize": "visualize",  # Generate visualization config
-                "end": END                 # Complete conversation
-            }
-            if self.all_tools:
-                edges["tools"] = "tools"   # Execute tools
-            
+            # Agent routing logic
             workflow.add_conditional_edges(
                 "agent", 
                 route_after_agent,
-                edges
+                {
+                    "tools": "tools",           # Execute tools
+                    "visualize": "visualize",   # Generate visualization
+                    "end": END                  # Complete conversation
+                }
             )
             
             # Compile with checkpointer and recursion limit
@@ -663,83 +699,6 @@ class MCPAgent:
         
         return None
     
-    def _extract_query_results(self, messages: List[Any]) -> Tuple[Optional[Dict], Optional[Dict]]:
-        """
-        Extract database query results from tool messages.
-        
-        Args:
-            messages: List of messages from agent response
-            
-        Returns:
-            Tuple of (query_result, latest_query_result):
-            - query_result: Last query result found (original logic)
-            - latest_query_result: Query result only after latest HumanMessage
-        """
-        query_result = None
-        latest_query_result = None
-        
-        # Original logic - get last query result from all messages
-        for msg in messages:
-            if isinstance(msg, ToolMessage):
-                result = self._parse_tool_message_for_query(msg)
-                if result:
-                    # Store the last query result (overwrite if multiple queries)
-                    query_result = result
-        
-        # New logic - find latest HumanMessage and get query results after it
-        latest_human_msg_index = -1
-        for i in range(len(messages) - 1, -1, -1):
-            if isinstance(messages[i], HumanMessage):
-                latest_human_msg_index = i
-                break
-        
-        # If we found a HumanMessage, look for ToolMessages after it
-        if latest_human_msg_index >= 0:
-            for i in range(latest_human_msg_index + 1, len(messages)):
-                msg = messages[i]
-                if isinstance(msg, ToolMessage):
-                    result = self._parse_tool_message_for_query(msg)
-                    if result:
-                        # Store the last query result after the latest HumanMessage
-                        latest_query_result = result
-        
-        if query_result:
-            self.logger.info("Query result captured successfully")
-        if latest_query_result:
-            self.logger.info("Latest query result (after last HumanMessage) captured successfully")
-        
-        return query_result, latest_query_result
-    
-    def _process_agent_response_messages(self, response: Dict) -> Tuple[str, List[Any], List[AIMessage]]:
-        """
-        Process response messages from agent to extract content and messages.
-        
-        Args:
-            response: Agent response dict
-            
-        Returns:
-            Tuple of (response_text, all_messages, ai_messages)
-        """
-        if not response or "messages" not in response:
-            self.logger.warning("No messages found in response, using string representation")
-            return str(response), [], []
-        
-        all_messages = response["messages"]
-        self.logger.debug(f"Processing {len(all_messages)} messages from agent response")
-        
-        # Extract AI messages
-        ai_messages = self._extract_ai_messages(all_messages)
-        
-        # Get response text from the LAST AIMessage
-        if ai_messages:
-            last_ai_message = ai_messages[-1]
-            response_text = last_ai_message.content or ""
-            self.logger.debug(f"Using last AIMessage content as response: {response_text[:100]}...")
-        else:
-            response_text = str(response)
-            self.logger.warning("No AIMessage found, using string representation of response")
-        
-        return response_text, all_messages, ai_messages
     
     # ============================================================================
     # Visualization Methods
@@ -810,13 +769,9 @@ class MCPAgent:
     # Main Public Method
     # ============================================================================
     
-    async def invoke_with_query_tracking(self, message: str, thread_id: str = "default") -> Dict[str, Any]:
+    async def invoke(self, message: str, thread_id: str = "default") -> Dict[str, Any]:
         """
-        Invoke the agent with a message and track database query results.
-        
-        This method coordinates the entire agent invocation pipeline including
-        message preparation, agent execution, response processing, and optional
-        visualization generation.
+        Invoke the agent with a message.
         
         Args:
             message: User message to process
@@ -827,77 +782,62 @@ class MCPAgent:
                 - response: Agent response text (from last AIMessage)
                 - query_result: Database query result if any execute_query_* tool was called
                 - graph: Visualization data if generated (optional)
-                
-        Raises:
-            Exception: If agent invocation fails
         """
         if not self._initialized:
             await self.initialize()
         
-        self.logger.debug(f"Invoking agent with query tracking for message: {message[:100]}...")
+        self.logger.debug(f"Invoking agent with message: {message[:100]}...")
         
         try:
-            # Step 1: Create user message
-            messages = [HumanMessage(content=message)]
+            # Prepare messages list
+            messages = []
             
-            # Step 2: Invoke the agent with extended state
+            # Check if this is the first message for this thread
+            if thread_id not in self._thread_resources_injected:
+                # Inject resources context on first message
+                resources_context = await self._format_resources_context()
+                if resources_context:
+                    messages.append(resources_context)
+                    self.logger.info(f"Injected MCP resources context for thread: {thread_id}")
+                
+                # Mark thread as having resources injected
+                self._thread_resources_injected[thread_id] = True
+            
+            # Add the user message
+            messages.append(HumanMessage(content=message))
+            
             config = {"configurable": {"thread_id": thread_id}}
+            
             response = await self.agent.ainvoke(
-                {"messages": messages, "thread_id": thread_id},
+                {"messages": messages},
                 config=config
             )
             
-            # Step 3: Initialize result structure
+            # Extract the response from state and messages
             result = {
                 "response": "",
-                "query_result": None,
-                "graph": None
+                "query_result": response.get("query_result"),  # From state
+                "graph": response.get("graph_data")  # From state
             }
             
-            # Step 4: Process agent response
-            response_text, all_messages, ai_messages = self._process_agent_response_messages(response)
-            result["response"] = response_text
+            # Get the last AI message as response text
+            all_messages = response.get("messages", [])
+            for msg in reversed(all_messages):
+                if isinstance(msg, AIMessage):
+                    result["response"] = msg.content
+                    break
             
-            # Step 5: Extract query results if present
-            # query_result = latest query_result in the history of messages
-            # latest_query_result = After HumanMessage if there was a query result
-            query_result, latest_query_result = self._extract_query_results(all_messages)
-            
-            # Use latest_query_result for current query context, but keep query_result for backward compatibility
-            if latest_query_result:
-                result["query_result"] = latest_query_result
-
-            # Step 6: Check if visualization was generated from the state
-            if response.get("visualization_decision"):
-                structured_resp = response["visualization_decision"]
-                
-                # Step 7: Handle visualization if structured response indicates need
-                if structured_resp.should_visualize and structured_resp.chart_config:
-                    self.logger.info(
-                        f"Visualization decision from state - Chart type: "
-                        f"{structured_resp.chart_config.chart_type}"
-                    )
-                    
-                    # Convert Pydantic model to dict for compatibility
-                    chart_config_dict = structured_resp.chart_config.model_dump()
-                    
-                    # Use the query_result that triggered visualization
-                    viz_query_result = response.get("query_result") or query_result
-                    
-                    if viz_query_result:
-                        # Generate visualization
-                        graph_data = await self._handle_visualization_with_config(
-                            viz_query_result,
-                            chart_config_dict,
-                            thread_id
-                        )
-                        if graph_data:
-                            result["graph"] = graph_data
-                else:
-                    self.logger.info("Visualization decision: No visualization needed")
-            else:
-                self.logger.debug("No visualization decision in state")
-            
+            # If query_result wasn't set in state, extract from tool messages
+            if not result["query_result"]:
+                query_tool_pattern = re.compile(QUERY_TOOL_PATTERN)
+                for msg in reversed(all_messages):
+                    if isinstance(msg, ToolMessage) and query_tool_pattern.match(msg.name):
+                        if not (hasattr(msg, 'status') and msg.status == 'error'):
+                            try:
+                                result["query_result"] = json.loads(msg.content)
+                                break
+                            except (json.JSONDecodeError, TypeError):
+                                pass
             self.logger.debug(
                 f"Agent response with query tracking completed. "
                 f"Query result present: {result['query_result'] is not None}, "
@@ -908,6 +848,11 @@ class MCPAgent:
         except Exception as e:
             self.logger.error(f"Failed to invoke agent with query tracking: {e}", exc_info=True)
             raise
+    
+    # Backward compatibility alias
+    async def invoke_with_query_tracking(self, message: str, thread_id: str = "default") -> Dict[str, Any]:
+        """Backward compatibility wrapper for invoke method"""
+        return await self.invoke(message, thread_id)
     
     async def stream(self, message: str, thread_id: str = "default"):
         """
