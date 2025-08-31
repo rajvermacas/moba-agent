@@ -82,5 +82,4 @@ VISUALIZATION_SYSTEM_PROMPT = """You are a helpful assistant sitting at a node i
         - Pie: Part-to-whole relationships
         - Scatter: Correlations
         - Heatmap: Matrix data
-        - Histogram
         """
